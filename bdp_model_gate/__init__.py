@@ -35,7 +35,7 @@ from .config import (
 from .core import BaseCheck, CheckResult, GateReport, ModelGate, StructuredGateContext
 from .task import ALL_TASKS, BINARY, MULTICLASS, REGRESSION
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 
 def run_structured_gate(model, X, y_true, y_pred, protected_df=None, **kwargs) -> GateReport:

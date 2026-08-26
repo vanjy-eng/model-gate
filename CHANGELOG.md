@@ -6,6 +6,74 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-27
+
+Calibration and separation — the two fairness families the suite lacked.
+
+Before this release the library measured only **independence** (demographic
+parity). That was not a neutral position: parity ignores `y_true` entirely, so
+a model can satisfy it by being wrong in compensating directions, and a reader
+seeing one green check had no way to know two other notions were never tested.
+
+### Added
+- **`EqualisedOddsCheck`** — *separation*. Reports two notions per attribute:
+  **equal opportunity** (the true-positive-rate difference — among applicants
+  who should be approved, is every group equally likely to be?) and
+  **equalised odds** (the larger of the TPR and FPR differences). Both
+  condition on the ground truth, which is exactly what parity does not.
+- **`SubgroupCalibrationCheck`** — *sufficiency*. Does a score of 0.7 carry
+  the same real risk for every group? A model can be well calibrated overall
+  and badly miscalibrated for a minority, because the majority dominates the
+  average and hides it.
+- **`CalibrationCheck`** — is the model calibrated at all? Discrimination and
+  calibration are independent: a model can rank perfectly while every
+  probability it emits is twice too high, scoring beautifully and mispricing
+  every policy. Blocking, but `max_ece` defaults to a permissive `0.10` —
+  plenty of good models are uncalibrated by construction, and a gate that
+  blocks all of them gets switched off.
+- **`bdp_model_gate.calibration`** — numpy-native, so it works on a core
+  install: `calibration_curve` (uniform or quantile bins), ECE, Brier, and
+  Murphy's decomposition into reliability, resolution and uncertainty.
+  `resolution` is the term people forget: a model predicting the base rate for
+  everyone is perfectly calibrated and completely useless, and neither ECE nor
+  the Brier score says so alone. Both `brier` and `binned_brier` are returned,
+  because the decomposition identity holds exactly only over the binned
+  forecast — a number that almost adds up is worse than two that are labelled.
+- **Intersectional fairness** via `FairnessConfig.intersectional`. Harm
+  concentrates where attributes meet, and marginal checks are blind to it by
+  construction. `bdp_model_gate.groups.iter_protected` yields pairwise
+  combinations so every group-based check gets this from one place. Off by
+  default; only pairs are generated, since three-way intersections fragment a
+  validation set faster than any realistic `min_group_size` tolerates.
+- Config: `max_ece`, `n_calibration_bins`, `calibration_strategy`,
+  `equalised_odds_threshold`, `subgroup_calibration_threshold`,
+  `intersectional`.
+- `tests/test_calibration.py` — 18 known-answer tests. A constant forecast at
+  the base rate has an ECE of exactly 0; a uniform 0.2 offset has an ECE of
+  exactly 0.2; a group with no positive cases is skipped rather than divided
+  by zero.
+
+### The impossibility, demonstrated rather than asserted
+Calibration, TPR balance and FPR balance are mutually incompatible whenever
+base rates differ between groups (Kleinberg–Mullainathan–Raghavan 2016;
+Chouldechova 2017). The suite therefore reports all three and names the
+trade-off rather than picking one silently.
+
+Notebook 01 now forces it: rescaling each group's scores to equalise selection
+rates moves the parity gap from **0.365 to 0.010** while the subgroup
+calibration gap goes from **0.067 to 0.131**. Independence bought, sufficiency
+spent. A tool reporting only demographic parity would let you "fix" a model by
+making its scores mean different things for different people, and call that
+progress.
+
+### Changed
+- The default suite is 16 checks, up from 13.
+- Examples: notebook 01 gains sections on the three families, overall
+  calibration, and intersections.
+- Web: new `docs/tasks/fairness.md`; `reference/checks.md` and
+  `reference/configuration.md` updated.
+
+
 ### Added
 - Previous/next controls on every documentation page. Material's stock
   `navigation.footer` omits a control at the ends of the nav, which makes the
@@ -561,7 +629,8 @@ in 0.4.0; example notebooks in 0.4.1.
 - `bdp-model-gate` CLI for CI/CD use.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
-[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/vanjy-eng/model-gate/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/vanjy-eng/model-gate/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/vanjy-eng/model-gate/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vanjy-eng/model-gate/compare/v0.3.2...v0.4.0

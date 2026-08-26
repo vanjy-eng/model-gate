@@ -20,68 +20,12 @@ Every entry below ships as a complete slice, not just code:
 A release is not done when the code works. It is done when someone who has
 never seen it can find it, read why it exists, and run it.
 
-Current release: **0.4.2**. In progress: **0.5.0**.
+Current release: **0.5.0**. Next: **0.5.1**.
 
 > **This file tracks what should happen.** What already happened lives in
 > [`CHANGELOG.md`](CHANGELOG.md), and shipped entries are removed from here
 > rather than marked done. The only release appearing in both is the one
 > currently being built.
-
----
-
-## 0.5.0 — Calibration and separation
-
-**Branch:** `feat/calibration-separation`
-
-The suite currently implements exactly one of the three fairness families —
-*independence* (demographic parity). It has neither *separation* (equal error
-rates) nor *sufficiency* (calibration). Shipping parity alone silently makes a
-choice on the user's behalf.
-
-### Calibration
-
-- **`CalibrationCheck`** for classification. `CalibrationParityCheck` exists
-  but is regression-only, so a classifier's calibration is currently
-  unmeasured. Expected Calibration Error plus a Brier decomposition.
-- **Calibration by subgroup** — a model can be well-calibrated overall and
-  badly miscalibrated for a minority group. That is a fairness finding, not a
-  performance one.
-
-For credit scoring and pricing this often matters more than discrimination: a
-model with AUC 0.86 whose probabilities are systematically twice too high
-misprices every policy while scoring well on everything measured today.
-
-### Separation
-
-- **`EqualisedOddsCheck`** — TPR and FPR differences across groups.
-  `fairlearn` already provides `equalized_odds_difference` and
-  `true_positive_rate_difference`.
-- **Equal opportunity** (TPR parity alone), which is what lending regulators
-  most often centre on.
-
-Demographic parity ignores `y_true` entirely, so a model can achieve perfect
-parity by being wrong in compensating directions.
-
-### State the impossibility
-
-Calibration, TPR balance and FPR balance are mutually incompatible except in
-degenerate cases (Kleinberg–Mullainathan–Raghavan 2016; Chouldechova 2017).
-The report must present all three and name the trade-off rather than let a
-reader assume the one they happen to read is *the* answer. This is as much a
-documentation decision as a code one.
-
-### Also
-
-- **Intersectional fairness** — the suite checks each attribute independently,
-  but harm concentrates at intersections. Joint `gender × region` groups,
-  guarded by `min_group_size`.
-
-### Deliverables
-
-- Examples: extend `01_binary_classification_sklearn` with a calibration and
-  separation section; the impossibility trade-off is best shown, not told.
-- Web: new `docs/tasks/fairness.md` covering the three families; update
-  `docs/reference/checks.md` and `docs/reference/configuration.md`.
 
 ---
 
