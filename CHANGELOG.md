@@ -6,6 +6,18 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- Previous/next controls on every documentation page. Material's stock
+  `navigation.footer` omits a control at the ends of the nav, which makes the
+  footer move between pages; `web/overrides/partials/footer.html` renders both
+  positions always and marks the unavailable direction as a disabled `<span>`
+  — no href, out of the tab order, `aria-disabled`, and dimmed.
+
+### Changed
+- Roadmap re-sequenced for 0.5.x and 0.6.x, putting statistical depth before
+  breadth. Tooling pinning (was 0.4.3) folds into 0.6.0 alongside confidence
+  intervals; release automation (was 0.4.4) becomes 0.6.1.
+
 ## [0.4.2] - 2026-08-26
 
 Robustness of the checks themselves. Six silent failures have shipped and been
@@ -85,6 +97,23 @@ surfaced while building it.
   with the documentation as a separate `Documentation` URL. Takes effect on
   this upload; 0.4.1 was published with the old value.
 - `hypothesis` and `mutmut` added to the `dev` extra.
+
+### Added — the project website
+- **`web/`** — a hand-built landing page with MkDocs Material documentation
+  beneath it, mirroring how `pandas.pydata.org` is assembled, deployed to
+  GitHub Pages by `.github/workflows/docs.yml`. `README.md` had reached 604
+  lines and 15 top-level sections; someone wanting regression had to scroll
+  past binary classification, metric selection, custom checks and plugins.
+- Three things keep it from going stale: `mkdocstrings` generates the API
+  reference from the docstrings covering 89% of the public API so it cannot
+  drift; `build.sh` copies notebooks from `examples/` rather than keeping a
+  second copy, leaving `run_all.sh` the single source of truth; and
+  `mkdocs build --strict` fails on a broken internal link or a page missing
+  from the nav.
+- Written for an external audience — banks, insurers, any organisation with a
+  working data-science team. NDPA/NDPR defaults are presented as
+  *configurable defaults* rather than the product's premise, so a reader in
+  another regime sees themselves in the hero.
 
 
 ## [0.4.1] - 2026-08-26

@@ -20,100 +20,12 @@ Every entry below ships as a complete slice, not just code:
 A release is not done when the code works. It is done when someone who has
 never seen it can find it, read why it exists, and run it.
 
-Current release: **0.4.2**.
+Current release: **0.4.2**. In progress: **0.5.0**.
 
----
-
-## 0.4.1-alpha — Documentation site
-
-Tracked separately from the library, which is already at 0.4.1 on PyPI. The
-`-alpha` marks the **site**, not the package: it lives in `web/`, is not yet
-deployed, and its structure will move before it is announced.
-
-### Why
-
-`README.md` reached 604 lines and 15 top-level sections. Someone who wants
-regression scrolls past binary classification, metric selection, custom
-checks and plugins to reach it. Splitting that up is the actual win; the site
-is the means.
-
-### Audience
-
-External — banks, insurers and any organisation with a working data-science
-team. Two consequences:
-
-- The generic quickstart leads. NDPA/NDPR defaults are presented as
-  **configurable defaults**, not the product's premise, so a reader in
-  another regime sees themselves in the hero.
-- Insurance use cases are the worked examples rather than the framing.
-
-### Shape: landing + docs, as pandas does it
-
-Two builds under one deploy, mirroring `pandas.pydata.org` (a hand-built
-marketing root, with Sphinx docs beneath it):
-
-```
-web/
-  landing/index.html    hand-built landing page, deployed at /
-  mkdocs.yml            MkDocs Material, deployed at /docs/
-  docs/                 the guide, reference and rendered notebooks
-  requirements.txt      pinned docs toolchain
-```
-
-- **MkDocs Material**, not Sphinx: the content is already Markdown, and the
-  API is 53 public objects — not the scale where intersphinx and autodoc
-  earn their configuration cost.
-- **`mkdocstrings`** generates the API reference from the docstrings that
-  already cover 89% of the public API, so it cannot drift from the source.
-- **`mkdocs-jupyter`** renders the five executed notebooks as pages, so
-  `examples/run_all.sh` keeps them honest and there is no second copy.
-- Multi-version docs (`mike`) deferred to 1.0 — pre-1.0 and moving this
-  fast, one accurate "latest" beats five stale versions.
-
-### Known risk
-
-A site multiplies the surface that can go stale, and this project has form:
-a notebook shipped two minor versions behind, and twice a notebook's prose
-contradicted its own output. The generated API reference and rendered
-notebooks are structurally protected. **Prose code blocks are not** —
-executing them in CI is the open question, deferred to the 0.4.2 robustness
-work rather than decided here.
-
----
-
-## 0.4.2 — Robustness of the checks themselves ✅
-
-**Shipped.** See [`CHANGELOG.md`](CHANGELOG.md) for detail. The suite went from
-167 to 256 tests across five new files: known-answer, metamorphic invariant,
-model-family matrix, property-based, and skip-reason coverage — plus an autouse
-`CHECK_ERROR` guard and advisory mutation testing.
-
-Two more bugs surfaced while building it, both found by the new tests rather
-than by inspection: `shap_gap_threshold` was absolute where it needed to be
-relative, and subsampling selected rows by position, so sorting a CSV could
-change a verdict.
-
-Still open from the original plan:
-
-- **A mutation kill-rate floor.** First measured baseline is **35.6%**
-  (1118 killed of 3139 with a verdict, from 3430 generated). The job stays
-  advisory until that is stable across runs, then
-  `mutation_report.py --min-kill-rate` turns it into a threshold.
-
-  Getting there took two false starts worth recording. mutmut copies the
-  source into `mutants/` and runs the tests from there, so a partial copy left
-  `bdp_model_gate` an incomplete package whose imports silently fell back to
-  the installed one — every mutant survived, which looks like a catastrophic
-  result but means nothing ran. And `mutmut results` lists **only survivors**,
-  so counting statuses from it yields a 0% kill rate regardless of the truth.
-  `scripts/mutation_report.py` now parses the run's own tally and fails when
-  too few mutants got a verdict, so the job cannot go green having done
-  nothing.
-
-- **The survivors themselves.** 2021 of them, concentrated in
-  `structured/fairness` (506), `structured/security` (318) and `metrics`
-  (272). Each is a line the suite does not pin down; the report lists them by
-  module so the next pass has somewhere to start.
+> **This file tracks what should happen.** What already happened lives in
+> [`CHANGELOG.md`](CHANGELOG.md), and shipped entries are removed from here
+> rather than marked done. The only release appearing in both is the one
+> currently being built.
 
 ---
 
