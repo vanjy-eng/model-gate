@@ -37,3 +37,40 @@
 .md-typeset table:not([class]) td:nth-child(n+2) {
   font-variant-numeric: tabular-nums;
 }
+
+/* --------------------------------------------------------------------------
+   Disabled previous/next controls
+   --------------------------------------------------------------------------
+   The footer override renders both directions on every page so the controls
+   do not move between pages. The unavailable one is a <span>, so it is
+   already unclickable and out of the tab order — this makes that legible.
+   -------------------------------------------------------------------------- */
+
+.md-footer__link--disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+/* Material lifts the real links on hover; a disabled one must stay put. */
+.md-footer__link--disabled:hover,
+.md-footer__link--disabled:focus {
+  opacity: 0.38;
+  transform: none;
+}
+
+.md-footer__link--disabled .md-footer__button {
+  transform: none;
+}
+
+/* The placeholder text is a state, not a destination. */
+.md-footer__link--disabled .md-ellipsis {
+  font-style: italic;
+}
+
+@media screen and (max-width: 44.984375em) {
+  /* Material hides the previous title on small screens; keep the disabled
+     placeholder consistent with that rather than showing a stray label. */
+  .md-footer__link--disabled.md-footer__link--prev .md-footer__title {
+    display: none;
+  }
+}

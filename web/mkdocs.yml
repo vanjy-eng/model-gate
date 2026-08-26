@@ -16,6 +16,7 @@ site_dir: _site/docs
 
 theme:
   name: material
+  custom_dir: overrides       # partials/footer.html — see web/overrides/
   language: en
   font:
     text: IBM Plex Sans
@@ -23,6 +24,7 @@ theme:
   icon:
     repo: fontawesome/brands/github
   features:
+    - navigation.footer       # previous / next controls at the foot of each page
     - navigation.sections
     - navigation.top
     - navigation.tracking
