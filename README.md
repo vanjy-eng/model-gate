@@ -550,11 +550,17 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.4.2** | Robustness of the checks themselves — known-answer tests, metamorphic invariants, a model-family matrix and mutation testing. Plus making `shap_gap_threshold` relative rather than absolute. |
-| **0.4.3** | Pinned lint tooling, and reconciling pre-commit with CI. |
-| **0.4.4** | Release automation — publish on tag via Trusted Publishing, TestPyPI smoke-test, and PyPI behind a required reviewer. |
+| **0.5.0** | Calibration and separation — the two fairness families the suite lacks, and the impossibility trade-off between them. |
+| **0.5.1** | Plots and a self-contained HTML report, so a `NEEDS_REVIEW` verdict reaches a human as a page rather than a JSON blob. |
+| **0.5.2** | Validation methodology — leakage detection, out-of-time holdouts, feature-list checks. |
+| **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
+| **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
+| **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |
 | **1.0.0** | A public, subclassable `ModelAdapter`. |
-| Later | Unstructured data support (text/image/audio); HTML/Markdown report rendering alongside `to_json()`. |
+| Later | Unstructured data (text/image/audio). |
+
+Each release ships as a complete slice: implementation, tests, example
+notebooks, and the documentation pages that describe it.
 
 ## Development
 
