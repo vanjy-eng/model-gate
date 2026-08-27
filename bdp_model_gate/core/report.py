@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from .base import CheckResult
 
@@ -24,6 +25,15 @@ class GateReport:
     #: The resolved prediction task this run was graded as. Recorded because
     #: a report read months later must say what it assumed the model was.
     task: str | None = None
+
+    #: Set by `ModelGate.run` so `to_html()` can ask each check to draw
+    #: itself. Excluded from the constructor, the repr, equality and
+    #: `to_dict()`: a report is an archival record of findings, and neither
+    #: the check objects nor the validation set belong in one. They are a
+    #: convenience for rendering in the session that produced the report,
+    #: nothing more.
+    _checks: Any = field(default=None, init=False, repr=False, compare=False)
+    _context: Any = field(default=None, init=False, repr=False, compare=False)
 
     @property
     def model_auc(self) -> float | None:
@@ -94,6 +104,40 @@ class GateReport:
             with open(path, "w") as f:
                 f.write(payload)
         return payload
+
+    def to_html(
+        self,
+        path: str | None = None,
+        checks: Any = None,
+        context: Any = None,
+        title: str = "Model gate report",
+        include_plots: bool = True,
+    ) -> str:
+        """Renders the report as one self-contained HTML page.
+
+        A `NEEDS_REVIEW` verdict asks a person to decide, and `to_json()`
+        hands that person a blob. This hands them a page: the verdict, every
+        finding, and each check's plot beside the number it explains — no
+        network, no JavaScript, nothing to install to open it.
+
+        Plots need the checks and the data they scored, which `ModelGate.run`
+        attaches to the report for you. Pass `checks` and `context` explicitly
+        to override, or `include_plots=False` for text only. Without the
+        `[plots]` extra the page renders text-only by itself.
+        """
+        from ..reporting import render_html
+
+        page = render_html(
+            self,
+            checks=checks if checks is not None else self._checks,
+            context=context if context is not None else self._context,
+            title=title,
+            include_plots=include_plots,
+        )
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(page)
+        return page
 
     def summary(self) -> str:
         task_note = f", {self.task}" if self.task else ""

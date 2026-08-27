@@ -488,6 +488,7 @@
     </a>
     <nav>
       <a href="#start">Getting started</a>
+      <a href="#report" class="optional">The report</a>
       <a href="#checks" class="optional">Checks</a>
       <a href="#coverage" class="optional">Coverage</a>
       <a href="https://github.com/vanjy-eng/model-gate">GitHub</a>
@@ -545,6 +546,29 @@
     </div>
   </section>
 
+  <section class="wrap divider" id="report">
+    <span class="eyebrow">What the reviewer gets</span>
+    <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">
+      NEEDS_REVIEW hands the decision to a person.
+    </h2>
+    <p class="prose" style="margin-top:.9rem;">
+      So hand them a page, not a blob. <code>report.to_html("gate-report.html")</code>
+      writes one self-contained file: the verdict in plain words, every finding with
+      its evidence, and a chart beside each number whose <em>shape</em> is what has to
+      be judged — a reliability curve, a threshold sweep showing whether the verdict
+      survives a different cutoff, a loss-ratio scatter showing whether a margin gap is
+      flat or grows with the risk.
+    </p>
+    <p class="prose" style="margin-top:.7rem;">
+      No JavaScript, no stylesheet, no font, nothing fetched from anywhere. It opens
+      offline years later and prints clean, because that is what a governance record
+      has to do.
+    </p>
+    <p style="margin-top:1.1rem;">
+      <a class="btn btn-ghost" href="docs/reference/reports/">See what is in the report</a>
+    </p>
+  </section>
+
   <section class="wrap divider" id="start">
     <span class="eyebrow">Documentation</span>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">Where to go next</h2>
@@ -566,14 +590,14 @@
       </a>
       <a class="quad-card" href="docs/examples/">
         <h3>Examples</h3>
-        <p>Five runnable notebooks: binary, multiclass, regression, PyTorch, boosters.</p>
+        <p>Six runnable notebooks: binary, multiclass, regression, PyTorch, boosters, reports.</p>
         <span class="go">Open the notebooks →</span>
       </a>
     </div>
   </section>
 
   <section class="wrap divider" id="checks">
-    <span class="eyebrow">Thirteen checks, four categories</span>
+    <span class="eyebrow">Sixteen checks, four categories</span>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">What gets checked</h2>
     <p class="prose" style="margin-top:.9rem;">
       Optional inputs degrade rather than fail — omit protected attributes and

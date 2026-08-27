@@ -1,7 +1,8 @@
 # The checks
 
-Thirteen built-in checks. Each declares a **category**, whether it is
-**blocking**, and which **tasks** it supports.
+Sixteen built-in checks. Each declares a **category**, whether it is
+**blocking**, and which **tasks** it supports. Nine also draw a chart — see
+[Plots](plots.md).
 
 ## Fairness — non-blocking
 

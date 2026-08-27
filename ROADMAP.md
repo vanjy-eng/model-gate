@@ -20,117 +20,12 @@ Every entry below ships as a complete slice, not just code:
 A release is not done when the code works. It is done when someone who has
 never seen it can find it, read why it exists, and run it.
 
-Current release: **0.5.0**. Next: **0.5.1**.
+Current release: **0.5.1**. Next: **0.5.2**.
 
 > **This file tracks what should happen.** What already happened lives in
 > [`CHANGELOG.md`](CHANGELOG.md), and shipped entries are removed from here
 > rather than marked done. The only release appearing in both is the one
 > currently being built.
-
----
-
-## 0.5.1 — Plotting and the HTML report
-
-**Branch:** `feat/plots-and-report`
-
-A `NEEDS_REVIEW` verdict means a human must judge. Today that human gets a
-JSON blob. This release gives them a page.
-
-### The principle
-
-Plot where a check collapses a distribution to a scalar **and the shape is
-what you need to judge**. Latency, cost and model-card completeness are
-genuinely scalars; plotting them is decoration.
-
-| Plot | Why the number is not enough |
-|---|---|
-| Reliability curve, per subgroup | two models with identical ECE can be miscalibrated in opposite ways |
-| Actual-vs-expected by band | RMSE says "wrong by 25k"; A/E says "under-priced in the top decile" |
-| Threshold sweep with the verdict marked | shows whether the verdict survives a small change of cutoff |
-| Ordinal confusion heatmap | `quadratic_kappa` hides *direction*; accept↔decline is not refer↔accept |
-| Loss-ratio scatter with the 45° line | shows whether the margin gap is uniform or concentrated |
-| Proxy η² heatmap, feature × attribute | replaces a 40-row table; the eye finds the hot cell |
-| Robustness curve over epsilon | flat-then-collapse is a different risk from linear decay |
-
-Grouped, three pages tell a story no single chart does: a **fairness page**
-(calibration, selection rate, error rate as small multiples — where the
-impossibility trade-off becomes visible), a **pricing page** (A/E beside
-loss-ratio), and a **decision page** (threshold sweep).
-
-### Design
-
-- **An optional `plot()` method on `BaseCheck`**, not a subclass and not free
-  functions. A subclass forces every check author into an inheritance
-  decision; free functions drift from the check they illustrate. A method
-  keeps the plot beside the logic that produced the number.
-- **Signature `plot(self, context, results=None, ax=None) -> Axes`.** Taking
-  and returning an `Axes` is the whole "we are not replacing your plotting
-  library" contract — we draw onto your canvas and hand it back.
-- **Discovery by override**, not a capability flag: the renderer calls
-  `plot()` and uses whatever returns something. Nothing new for plugin
-  authors to maintain.
-- **Recompute rather than store.** Small per-group dicts already in
-  `metadata` (`group_loss_ratio`, `group_means`, `group_mae`) are *findings*
-  and stay. Anything array-sized — bin edges, curve points, per-row SHAP — is
-  recomputed at plot time, so the archival JSON does not carry presentation
-  data most consumers never read.
-
-### Library: seaborn
-
-Chosen over bare matplotlib. Its declared requirements are matplotlib, numpy
-and pandas — **no scipy** — and since numpy and pandas already ship, the
-marginal cost over matplotlib is about 3MB.
-
-Two constraints that follow:
-
-- **Axes-level functions only** (`barplot`, `lineplot`, `heatmap`,
-  `scatterplot`, `histplot`). Seaborn's *figure-level* functions (`relplot`,
-  `catplot`, `displot`) build their own Figure and do not accept `ax`, which
-  would break the composition contract.
-- `seaborn.color_palette("colorblind")` gives the CVD-safe categorical
-  palette without hand-rolling one.
-
-Rejected: **plotly** and **altair** need JavaScript at render time. The output
-here is an archival record that gets printed, emailed and read years later —
-JS breaks all three and adds megabytes per report. If an interactive
-exploration dashboard is ever wanted, that is a second renderer, not a
-replacement.
-
-### Styling and accessibility
-
-- A `style.mplstyle` carrying the site palette — deep teal `#0e5c55`, cool
-  green-grey neutrals, IBM Plex Sans/Mono — so plots match the docs.
-- **SVG, inlined into the HTML** rather than `<img src="data:...">`. Inlined
-  SVG inherits page CSS, so the report is theme-aware light/dark from one
-  render.
-- Semantic colours (pass / review / blocked) stay **out** of the categorical
-  cycle; groups must never borrow verdict hues.
-- **Never encode by colour alone** — pair with marker shape or hatching, since
-  these get printed greyscale.
-
-### Guard against the obvious trap
-
-`AdversarialRobustnessCheck` and `CounterfactualFlipCheck` score a
-*subsample*. A plot that recomputes must draw the same rows the finding came
-from, or the picture contradicts the number it illustrates — the exact class
-of silent wrongness 0.4.2 exists to prevent. `stable_sample` is
-content-addressed and deterministic, so this holds by construction; a test
-must assert the plotted value equals the value in `metadata`.
-
-Expensive plots — the robustness curve re-scores at several epsilons, which
-costs real money against a metered endpoint — are opt-in, not default.
-
-### Deliverables
-
-- `matplotlib` and `seaborn` in a new `[plots]` extra. Without it, `plot()`
-  raises `GateConfigurationError` naming the extra and the report renders
-  text-only, exactly as shap and fairlearn already degrade.
-- `GateReport.to_html()`, self-contained, plots inline.
-- Examples: a new `06_reports_and_plots.ipynb`; add report rendering to
-  `01`.
-- Web: new `docs/reference/plots.md` and `docs/reference/reports.md`; link
-  from the landing page, since "produces a report a reviewer can sign" is a
-  capability claim.
 
 ---
 

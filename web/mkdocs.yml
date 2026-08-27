@@ -107,6 +107,8 @@ nav:
       - The checks: reference/checks.md
       - Configuration: reference/configuration.md
       - Command line: reference/cli.md
+      - Plots: reference/plots.md
+      - Reports: reference/reports.md
       - API: reference/api.md
   - Extending: extending.md
   - Examples:
@@ -116,3 +118,4 @@ nav:
       - 03 Regression: examples/03_regression_sklearn.ipynb
       - 04 PyTorch and friends: examples/04_any_framework_classification.ipynb
       - 05 Boosters and the CLI: examples/05_boosters_and_cli.ipynb
+      - 06 Reports and plots: examples/06_reports_and_plots.ipynb

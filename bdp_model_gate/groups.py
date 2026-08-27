@@ -65,4 +65,27 @@ def iter_protected(
         yield f"{left}{JOIN}{right}", combined
 
 
-__all__ = ["JOIN", "iter_protected"]
+def group_series(
+    protected_df: pd.DataFrame,
+    label: str,
+    min_group_size: int = 30,
+) -> pd.Series | None:
+    """The group series a check reported under `label`, or None.
+
+    A `CheckResult` names its groups by label — `"region"`, or
+    `"gender × region"` for an intersection — but carries only the summary
+    statistics, not the split they came from. A `plot()` that wants to draw
+    the underlying distribution has to recover it, and recovering it by
+    re-deriving the intersection by hand is how a chart ends up illustrating
+    a different split from the one that was scored.
+
+    Intersections are always searched, whatever the caller's `intersectional`
+    setting: the label is evidence the check produced it.
+    """
+    for name, series in iter_protected(protected_df, True, min_group_size):
+        if name == label:
+            return series
+    return None
+
+
+__all__ = ["JOIN", "group_series", "iter_protected"]

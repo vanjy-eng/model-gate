@@ -6,6 +6,95 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-27
+
+Plots, and a report a reviewer can actually read.
+
+`NEEDS_REVIEW` is a verdict that delegates to a human, and until now that
+human received a JSON blob. This release gives them a page — and gives the
+checks whose finding is a *shape* a way to show it.
+
+### Added
+- **`BaseCheck.plot(context, results=None, ax=None)`** — optional, discovered
+  by override alone, so there is nothing for a plugin author to register. It
+  takes and returns a matplotlib `Axes`: we draw onto your canvas and hand it
+  back, which is the whole "we are not replacing your plotting library"
+  contract. Nine checks implement it; the rest deliberately do not.
+- **`GateReport.to_html(path=None)`** — one self-contained HTML file. No
+  script, no stylesheet, no font, no image fetched from anywhere: a governance
+  record is emailed, filed and reopened years later, and every external
+  reference is a way for it to stop rendering. Charts are inlined as SVG
+  rather than `<img src="data:...">`, so they inherit the page's CSS and one
+  render reads correctly in light and dark — and stays sharp in print.
+- **A `[plots]` extra** — matplotlib and seaborn. Without it `plot()` raises
+  `GateConfigurationError` naming the extra and the report renders text-only,
+  exactly as shap and fairlearn already degrade.
+- **`bdp_model_gate.plots`** — `require_plotting`, `plotting_available`,
+  `worst_result`, and a `style` module carrying the documentation site's
+  palette. Two colour systems kept strictly apart: **semantic** (pass /
+  review / blocked) and **categorical** (Okabe–Ito, colour-blind safe) for
+  groups. A group never borrows a verdict hue, and colour is never the only
+  encoding — series carry marker shapes and bars carry hatching, because
+  these reports get printed in greyscale.
+- **`bdp_model_gate.groups.group_series`** — recovers the exact split a result
+  was reported under, intersections included, so a plot cannot illustrate a
+  different grouping from the one that was scored.
+
+### The nine plots, and why each one is not a number
+| Plot | Check | What the scalar cannot say |
+|---|---|---|
+| Reliability curve | `CalibrationCheck` | two models with the same ECE can be miscalibrated in opposite ways |
+| Reliability per group | `SubgroupCalibrationCheck` | where the aggregate hides a minority |
+| TPR/FPR bars | `EqualisedOddsCheck` | which notion the model fails, and by how much |
+| eta-squared heatmap | `ProxyCorrelationCheck` | replaces a forty-row table; the eye finds the hot cell |
+| Threshold sweep | `DisparateImpactCheck` | whether the verdict survives a small change of cutoff |
+| Actual-vs-expected by band | `CalibrationParityCheck` | "wrong by 25k" versus "under-priced in the top decile" |
+| Loss-ratio scatter | `LossRatioParityCheck` | whether the margin gap is flat or grows with the risk |
+| Ordinal confusion | `PerformanceThresholdCheck` | `quadratic_kappa` hides *direction* |
+| Robustness sweep | `AdversarialRobustnessCheck` | flat-then-collapse is a different risk from linear decay |
+
+Latency, cost and model-card completeness are genuinely scalars. They are not
+plotted, and a binary confusion matrix is not plotted either: four numbers the
+detail line already carries.
+
+### A chart may not contradict the number beside it
+The obvious trap in this release: `AdversarialRobustnessCheck` scores a
+*subsample*, so a plot that re-sampled would illustrate different rows than
+the verdict came from — the same class of silent wrongness 0.4.2 exists to
+prevent. Three structural answers, not more tests of the same kind:
+
+- The perturbation core moved out of `run()` into `_measure(context, epsilon)`,
+  so the sweep and the verdict are **one implementation**. The curve passes
+  through the reported point by construction.
+- `ProxyCorrelationCheck` gained `_grid()` for the same reason: `run()` and
+  the heatmap read one object, so a cool cell can never sit beside a report
+  line calling that pair a proxy.
+- `tests/test_plots.py` reads values **back off the Axes** and asserts them
+  against `metadata` — bar heights against `group_tpr`, ray slopes against
+  `group_loss_ratio`, and the ECE rebuilt from the plotted points and marker
+  areas. A separate test permutes the rows and asserts the robustness curve is
+  unmoved.
+
+### Notes
+- The robustness sweep is **opt-in** (`AdversarialRobustnessCheck(plot_sweep=True)`):
+  each point re-scores the sample, which is a real bill against a metered
+  endpoint. Every other plot reads data already in hand.
+- `ModelGate.run` attaches the checks and context to the report so
+  `to_html()` works without re-supplying them. Both are excluded from the
+  constructor, the repr, equality and `to_dict()` — a report is an archival
+  record of findings, and neither the check objects nor the validation set
+  belong in one.
+- Fonts are resolved against what is installed before matplotlib is told about
+  them; naming a missing family costs a warning per text element drawn.
+- Heatmap colour bars are un-rasterised. matplotlib embeds a base64 PNG in
+  them by default, which was the one soft edge on an otherwise vector page.
+
+### Changed
+- The LICENSE copyright holder is now Vangelis Oden. Still MIT.
+- Examples: new `06_reports_and_plots.ipynb`; notebook 01 now ends by writing
+  a report.
+- Web: new `reference/plots.md` and `reference/reports.md`.
+
 ## [0.5.0] - 2026-08-27
 
 Calibration and separation — the two fairness families the suite lacked.
@@ -629,7 +718,8 @@ in 0.4.0; example notebooks in 0.4.1.
 - `bdp-model-gate` CLI for CI/CD use.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
-[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/vanjy-eng/model-gate/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/vanjy-eng/model-gate/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/vanjy-eng/model-gate/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/vanjy-eng/model-gate/compare/v0.4.0...v0.4.1

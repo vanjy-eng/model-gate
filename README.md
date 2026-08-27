@@ -27,6 +27,9 @@ pip install bdp-model-gate
 # structured-data checks (fairlearn, shap, scikit-learn) — install this for real use
 pip install bdp-model-gate[structured]
 
+# charts, and charts in the HTML report (matplotlib, seaborn)
+pip install bdp-model-gate[plots]
+
 # for running the test suite
 pip install bdp-model-gate[dev]
 ```
@@ -38,6 +41,9 @@ metric except `accuracy` needs `scikit-learn` — install the `structured`
 extra to get all of it. On a core-only install the default `metric="auto"`
 falls back to `accuracy` and says so loudly; see
 [Choosing the performance metric](#choosing-the-performance-metric).
+
+`plots` is separate again, and optional: without it `report.to_html()` still
+writes a full report, just without the charts.
 
 ## Quickstart
 
@@ -59,6 +65,7 @@ context = StructuredGateContext(
 report = ModelGate().run(context)
 print(report.summary())
 report.to_json("gate_report.json")
+report.to_html("gate_report.html")  # the page a reviewer reads
 
 if report.gate_status == "BLOCKED":
     raise SystemExit("Model failed governance gate — see gate_report.json")
@@ -85,6 +92,14 @@ flags need human judgment)
 - `DisparateImpactCheck` — outcome-level demographic parity
 - `ShapSubgroupCheck` — features whose SHAP contribution differs across groups
 - `CounterfactualFlipCheck` — prediction shift when a protected attribute is flipped
+- `EqualisedOddsCheck` — *separation*: equal opportunity (the TPR gap) and
+  equalised odds (the wider of the TPR and FPR gaps)
+- `SubgroupCalibrationCheck` — *sufficiency*: does a score of 0.7 carry the
+  same real risk for every group?
+
+The first four measure *independence*. All three families cannot hold at once
+whenever base rates differ between groups, so the suite reports each of them
+rather than picking one silently.
 
 **Fairness — regression** (non-blocking; see [Regression models](#regression-models))
 - `LossRatioParityCheck` — margin charged over each group's own expected loss
@@ -95,6 +110,9 @@ flags need human judgment)
 **Performance** (blocking)
 - `PerformanceThresholdCheck` — model score on a metric you choose, p95
   latency, cost-per-inference. See [Choosing the performance metric](#choosing-the-performance-metric).
+- `CalibrationCheck` — do the stated probabilities match observed
+  frequencies? Discrimination and calibration are independent: a model can
+  rank perfectly while every probability it emits is twice too high.
 
 **Compliance** (blocking)
 - `ComplianceMappingCheck` — model card completeness, DPIA trigger for
@@ -275,6 +293,76 @@ Pass `-v`/`--verbose` for debug-level logging (per-check timing, which
 checks ran/skipped and why) — the library uses the standard `logging`
 module throughout, so it composes with whatever logging setup your
 pipeline already has.
+
+## The report a reviewer reads
+
+`PASS` and `BLOCKED` need no page — the pipeline acts on the exit code.
+`NEEDS_REVIEW` delegates the decision to a person, and that person should not
+be handed a JSON blob.
+
+```python
+report.to_html("gate-report.html", title="Retail credit scorecard v4")
+```
+
+One self-contained file. No script, no stylesheet, no font, no image fetched
+from anywhere: a governance record gets emailed, filed and reopened years
+later, and every external reference is a way for it to stop rendering. It
+opens offline and prints clean.
+
+Charts are inlined as SVG rather than `<img src="data:...">`, so they inherit
+the page's CSS — one render reads correctly in light and dark — and stay
+sharp on paper.
+
+### Nine checks draw; seven deliberately do not
+
+A check draws only where it **collapses a distribution to a scalar and the
+shape is what you need to judge**. Latency, cost and model-card completeness
+are genuinely scalars, and a binary confusion matrix is four numbers the
+detail line already carries — charting those would be decoration.
+
+| Plot | Check | What the number cannot say |
+|---|---|---|
+| Reliability curve | `calibration` | two models with the same ECE can be wrong in opposite directions |
+| Reliability per group | `subgroup_calibration` | where the aggregate hides a minority |
+| TPR/FPR bars | `equalised_odds` | which notion is failed, and by how much |
+| η² heatmap | `proxy_correlation` | replaces a forty-row table; the eye finds the hot cell |
+| Threshold sweep | `disparate_impact` | whether the verdict survives a different cutoff |
+| Actual-vs-expected by band | `calibration_parity` | *where* in the book the pricing is wrong |
+| Loss-ratio scatter | `loss_ratio_parity` | whether the margin gap is flat or grows with the risk |
+| Ordinal confusion | `performance_thresholds` | the direction of the error, which `quadratic_kappa` hides |
+| Robustness sweep | `adversarial_robustness` | a cliff versus a slope |
+
+The robustness sweep is opt-in — `AdversarialRobustnessCheck(plot_sweep=True)`
+— because each point re-scores the sample, which is a real bill against a
+metered endpoint.
+
+### Composing into your own figures
+
+Every `plot()` takes an optional matplotlib `Axes` and returns **the same
+one**. We draw onto your canvas and hand it back; this library does not
+replace your plotting stack.
+
+```python
+import matplotlib.pyplot as plt
+from bdp_model_gate.structured.calibration_checks import (
+    CalibrationCheck,
+    SubgroupCalibrationCheck,
+)
+
+fig, (left, right) = plt.subplots(1, 2, figsize=(11, 5))
+CalibrationCheck().plot(context, ax=left)
+SubgroupCalibrationCheck().plot(context, ax=right)
+fig.savefig("fairness.svg")
+```
+
+Override `plot()` on your own check and the report picks it up — discovery is
+by override, so there is nothing to register.
+
+### It degrades; it never fails
+
+No `[plots]` extra, no context, or a `plot()` that raises: you lose a chart,
+never a finding. A renderer that threw and took the results with it would be
+worse than the JSON it replaces.
 
 ## Extending with plugins
 
@@ -550,8 +638,6 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.5.0** | Calibration and separation — the two fairness families the suite lacks, and the impossibility trade-off between them. |
-| **0.5.1** | Plots and a self-contained HTML report, so a `NEEDS_REVIEW` verdict reaches a human as a page rather than a JSON blob. |
 | **0.5.2** | Validation methodology — leakage detection, out-of-time holdouts, feature-list checks. |
 | **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
 | **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
@@ -598,7 +684,7 @@ code.
 
 ## Examples
 
-Five runnable notebooks live in [`examples/`](examples/), committed with
+Six runnable notebooks live in [`examples/`](examples/), committed with
 outputs so they read without being run:
 
 | Notebook | Covers |
@@ -608,5 +694,6 @@ outputs so they read without being run:
 | [03 regression](examples/03_regression_sklearn.ipynb) | motor premium, claims severity and frequency |
 | [04 PyTorch and friends](examples/04_any_framework_classification.ipynb) | `predict_fn`, `gradient_fn`, remote endpoints |
 | [05 boosters and the CLI](examples/05_boosters_and_cli.ipynb) | XGBoost `Booster`, `--model-loader` |
+| [06 reports and plots](examples/06_reports_and_plots.ipynb) | the nine charts, and the HTML report |
 
 See [`CHANGELOG.md`](https://github.com/vanjy-eng/model-gate/blob/main/CHANGELOG.md) for release history.
