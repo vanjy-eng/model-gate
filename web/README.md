@@ -13,7 +13,7 @@ web/
 ```
 
 Status: **0.4.1-alpha** — the site is new and its structure may move. The
-library it documents is 0.4.1.
+library it documents is 0.5.1.
 
 ## Build
 

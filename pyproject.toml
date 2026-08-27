@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bdp-model-gate"
-version = "0.5.0"
+version = "0.5.1"
 description = "Automated pre-deployment ML model governance gate: fairness, performance, compliance, and security checks."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -45,6 +45,15 @@ structured = [
     # which raised its own floor to Python 3.11 — above our requires-python.
     "shap>=0.48,<0.50",
 ]
+plots = [
+    # seaborn's own requirements are matplotlib, numpy and pandas — no scipy —
+    # so given numpy and pandas already ship, this costs a few MB over bare
+    # matplotlib. Static SVG rather than plotly or altair: a gate report is an
+    # archival record that gets printed, emailed and read years later, and
+    # anything needing JavaScript at render time breaks all three.
+    "matplotlib>=3.6,<4.0",
+    "seaborn>=0.13,<0.15",
+]
 yaml = [
     "pyyaml>=6.0,<7.0",
 ]
@@ -59,6 +68,8 @@ dev = [
     "ruff>=0.4,<1.0",
     "pandas-stubs",
     "hypothesis>=6.100,<7.0",
+    "matplotlib>=3.6,<4.0",
+    "seaborn>=0.13,<0.15",
     "mutmut>=3.0,<4.0",
     "pyyaml>=6.0,<7.0",
     "types-PyYAML>=6.0,<7.0",
@@ -103,20 +114,34 @@ also_copy = ["tests/", "pyproject.toml"]
 # Mutating these buys little: the CLI is argument plumbing the integration
 # tests already cover end to end, the unstructured module is NotImplementedError
 # stubs, and logging setup has no behaviour to get wrong.
+#
+# reporting.py is excluded for a different reason and a weaker one: it is HTML
+# assembly, so most mutants are cosmetic string edits, and the properties that
+# do matter (self-contained, escaped, degrades) are asserted in
+# tests/test_reporting.py, which is not in the fast selection below. Including
+# it would sink the score without producing a single actionable survivor.
+# The *plots* are mutated, because a chart disagreeing with its own finding is
+# exactly the failure this tooling exists to catch.
 do_not_mutate = [
     "*/cli.py",
     "*/_logging.py",
     "*/unstructured/*",
+    "*/reporting.py",
 ]
 
 # The full suite is the wrong selection here: the notebook-scale fixtures make
-# every mutant slow. These four files are fast and assert on values rather than
-# on "something was returned", which is what actually kills mutants.
+# every mutant slow. These files are fast and assert on values rather than on
+# "something was returned", which is what actually kills mutants.
+#
+# test_plots.py earns its ~1s because it reads values back off the Axes and
+# asserts them against the check's own metadata — the one invariant that keeps
+# a chart from contradicting the number printed beside it.
 pytest_add_cli_args_test_selection = [
     "tests/test_known_answers.py",
     "tests/test_invariants.py",
     "tests/test_properties.py",
     "tests/test_not_applicable.py",
+    "tests/test_plots.py",
 ]
 pytest_add_cli_args = ["-x", "-q", "--no-header", "--no-cov", "-p", "no:cacheprovider"]
 

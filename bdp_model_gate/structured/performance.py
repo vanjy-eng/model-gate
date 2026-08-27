@@ -129,6 +129,73 @@ class PerformanceThresholdCheck(BaseCheck):
             },
         )
 
+    def plot(self, context, results=None, ax=None):
+        """Confusion matrix in the caller's own class order.
+
+        Only drawn where the classes are *ordered* — `context.class_order`
+        set, three or more classes. `quadratic_kappa` penalises rank distance
+        squared and then reports one number, which hides direction entirely:
+        a model that sends accepts to decline and one that sends them to refer
+        can score alike, and only one of those is a scandal. Keeping the
+        caller's ordering on both axes is what makes distance from the
+        diagonal readable as severity.
+
+        A binary matrix is four numbers the detail line already carries, so
+        this returns None there rather than charting a table.
+        """
+        from ..plots import require_plotting
+        from ..plots.style import ACCENT, caption, new_axes, ring_cell, sharpen_colourbar
+
+        _, sns = require_plotting()
+        if context.y_true is None or context.y_pred is None:
+            return None
+        class_order = list(getattr(context, "class_order", None) or ())
+        if len(class_order) < 3 or resolve_task(context) != MULTICLASS:
+            return None
+
+        import pandas as pd
+
+        actual = pd.Series(to_class_labels(context.y_true, class_order)).astype(str)
+        predicted = pd.Series(to_class_labels(context.y_pred, class_order)).astype(str)
+        labels = [str(c) for c in class_order]
+        counts = (
+            pd.crosstab(actual, predicted)
+            .reindex(index=labels, columns=labels, fill_value=0)
+            .astype(int)
+        )
+        # Normalise by row, so a rare class is not rendered invisible by a
+        # common one — the recall of the smallest band is usually the finding.
+        rates = counts.div(counts.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
+
+        ax = new_axes(ax, figsize=(1.6 + 0.95 * len(labels), 1.4 + 0.85 * len(labels)))
+        sns.heatmap(
+            rates,
+            ax=ax,
+            annot=counts,
+            fmt="d",
+            cmap="crest",
+            vmin=0.0,
+            vmax=1.0,
+            linewidths=0.5,
+            linecolor="white",
+            cbar_kws={"label": "share of the true class"},
+        )
+        sharpen_colourbar(ax)
+
+        for i in range(len(labels)):  # ring the diagonal: correct, distance zero
+            ring_cell(ax, i, i, ACCENT)
+        ax.set_xlabel("predicted")
+        ax.set_ylabel("actual")
+        ax.set_title("Where the errors land — shading is the row's share, labels are counts")
+        ax.tick_params(labelrotation=0)
+        caption(
+            ax,
+            "distance from the ringed diagonal is how wrong the error was.\n"
+            "quadratic_kappa squares that distance and reports one number, which hides "
+            "the direction.",
+        )
+        return ax
+
     def run(self, context) -> list[CheckResult]:
         results = []
         # Stashed so _score can reach class_order without threading the whole

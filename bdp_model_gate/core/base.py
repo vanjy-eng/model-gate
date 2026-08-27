@@ -52,3 +52,25 @@ class BaseCheck:
 
     def run(self, context: Any) -> list[CheckResult]:
         raise NotImplementedError(f"{self.__class__.__name__} must implement run()")
+
+    def plot(self, context: Any, results: Any = None, ax: Any = None) -> Any:
+        """Draw this check's finding, or return None if it has none to draw.
+
+        Optional. The report renderer calls `plot()` on every check and uses
+        whatever comes back, so there is nothing to declare or register — an
+        override is the whole opt-in.
+
+        Implementations take an optional matplotlib `Axes` and **return it**,
+        which is what lets a caller compose these into their own figure and
+        restyle the result. Draw only where the shape matters: a check whose
+        finding is genuinely one number should leave this alone rather than
+        chart it.
+
+        Anything a plot needs beyond `CheckResult.metadata` is recomputed here
+        rather than stored on the result, so the archival JSON does not carry
+        presentation data most consumers never read. A check that scored a
+        *subsample* must redraw the same rows the finding came from — use
+        `bdp_model_gate._sampling.stable_sample`, which is content-addressed
+        and so returns the same rows by construction.
+        """
+        return None

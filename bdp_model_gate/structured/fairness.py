@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from .._logging import get_logger
 from .._sampling import stable_sample
@@ -17,6 +18,23 @@ from ..task import ALL_TASKS, CLASSIFICATION_TASKS, MULTICLASS, resolve_task
 logger = get_logger("fairness")
 
 
+def _correlation_ratio(values: pd.Series, groups: pd.Series) -> float:
+    """eta^2: the share of a feature's variance explained by group membership.
+
+    0 means the feature's distribution is identical across groups; 1 means
+    knowing the group tells you the feature exactly. Unlike a Pearson
+    correlation it needs no ordering on the groups, which is what makes it
+    the right statistic against a categorical protected attribute.
+    """
+    overall_mean = values.mean()
+    ss_between = sum(
+        len(values[groups == g]) * (values[groups == g].mean() - overall_mean) ** 2
+        for g in groups.unique()
+    )
+    ss_total = ((values - overall_mean) ** 2).sum()
+    return float(ss_between / ss_total) if ss_total > 0 else 0.0
+
+
 class ProxyCorrelationCheck(BaseCheck):
     """Flags numeric input features that correlate strongly with a protected
     attribute — even when that attribute itself is excluded from the model."""
@@ -28,6 +46,85 @@ class ProxyCorrelationCheck(BaseCheck):
 
     def __init__(self, config: FairnessConfig | None = None):
         self.config = config or FairnessConfig()
+
+    @staticmethod
+    def _grid(X, protected_df) -> pd.DataFrame:
+        """eta^2 for every (numeric feature, low-cardinality attribute) pair.
+
+        Built once and shared by `run` and `plot`, so the heatmap and the
+        findings can never disagree — the failure mode where a chart shows a
+        cool cell beside a report line calling it a proxy.
+
+        Attributes with ten or more distinct values are excluded: the
+        correlation ratio treats each value as its own group, so a near-unique
+        column drives eta^2 to 1 by arithmetic rather than by any real
+        association.
+        """
+        features = [c for c in X.columns if X[c].dtype.kind in "if"]
+        attributes = [c for c in protected_df.columns if protected_df[c].nunique() < 10]
+        return pd.DataFrame(
+            [[_correlation_ratio(X[f], protected_df[a]) for a in attributes] for f in features],
+            index=features,
+            columns=attributes,
+            dtype=float,
+        )
+
+    def plot(self, context, results=None, ax=None):
+        """Heatmap of eta^2, feature by protected attribute.
+
+        Replaces a table that runs to one row per pair — forty on a modest
+        model. The eye finds the hot cell in a grid immediately and cannot
+        scan forty rows for it, and the cool cells matter too: they are the
+        evidence that the flagged feature is the exception rather than the
+        whole feature set leaking.
+        """
+        from ..plots import require_plotting
+        from ..plots.style import caption, new_axes, ring_cell, sharpen_colourbar, verdict_colour
+
+        _, sns = require_plotting()
+        if context.protected_df is None or context.protected_df.empty:
+            return None
+        grid = self._grid(context.X, context.protected_df)
+        if grid.empty:
+            return None
+
+        # Height tracks the feature count: a fixed figure squeezes twenty
+        # rows into unreadable slivers.
+        ax = new_axes(ax, figsize=(1.6 + 1.3 * len(grid.columns), 1.2 + 0.34 * len(grid.index)))
+        sns.heatmap(
+            grid,
+            ax=ax,
+            annot=True,
+            fmt=".2f",
+            # Sequential, single-hue: eta^2 has a floor at zero and no
+            # meaningful midpoint, so a diverging map would invent one.
+            cmap="crest",
+            vmin=0.0,
+            vmax=1.0,
+            linewidths=0.5,
+            linecolor="white",
+            # Short, because the bar is as tall as the grid and a three-feature
+            # grid is two inches: a longer label runs off the top of the figure.
+            cbar_kws={"label": "eta²"},
+        )
+        sharpen_colourbar(ax)
+
+        # Ring what was actually reported, so the chart and the findings list
+        # can be checked against each other at a glance.
+        flagged = verdict_colour("NEEDS_REVIEW")
+        for i, j in zip(*np.where(grid.to_numpy() > self.config.proxy_corr_threshold)):
+            ring_cell(ax, int(j), int(i), flagged)
+
+        ax.set_title(f"Proxy strength (ringed above {self.config.proxy_corr_threshold})")
+        ax.set_xlabel(" ")  # a placeholder the caption can anchor beneath
+        ax.set_ylabel("")
+        ax.tick_params(labelrotation=0)
+        caption(
+            ax,
+            "eta² is the share of the feature's variance explained by group membership.\n"
+            "A hot cell means dropping the attribute from the model does not remove it.",
+        )
+        return ax
 
     def run(self, context) -> list[CheckResult]:
         X, protected_df = context.X, context.protected_df
@@ -42,22 +139,12 @@ class ProxyCorrelationCheck(BaseCheck):
                 )
             ]
 
+        grid = self._grid(X, protected_df)
+        values = grid.to_numpy(dtype=float)
         results = []
-        for feature in X.columns:
-            if X[feature].dtype.kind not in "if":  # numeric only
-                continue
-            for attr in protected_df.columns:
-                if protected_df[attr].nunique() >= 10:
-                    continue  # treat as continuous — correlation ratio not meaningful
-                groups = protected_df[attr]
-                overall_mean = X[feature].mean()
-                ss_between = sum(
-                    len(X[feature][groups == g])
-                    * (X[feature][groups == g].mean() - overall_mean) ** 2
-                    for g in groups.unique()
-                )
-                ss_total = ((X[feature] - overall_mean) ** 2).sum()
-                eta_sq = ss_between / ss_total if ss_total > 0 else 0.0
+        for i, feature in enumerate(grid.index):
+            for j, attr in enumerate(grid.columns):
+                eta_sq = float(values[i, j])
                 if eta_sq > self.config.proxy_corr_threshold:
                     results.append(
                         CheckResult(
@@ -197,6 +284,105 @@ class DisparateImpactCheck(BaseCheck):
                 )
             )
         return results
+
+    def plot(self, context, results=None, ax=None):
+        """Parity difference swept across every decision threshold.
+
+        A single cutoff produces a single number, and the number is a
+        cliff-edge: 0.49 and 0.51 can sit on opposite sides of the verdict.
+        The sweep answers the question a reviewer actually has — does this
+        verdict survive a small change of cutoff, or was it an artefact of
+        where the cutoff happened to land?
+
+        Returns None for multiclass, where the prediction is a class rather
+        than a score and there is no threshold to move.
+        """
+        from ..plots import require_plotting
+        from ..plots.style import (
+            MUTED,
+            RULE,
+            caption,
+            categorical,
+            markers,
+            new_axes,
+            verdict_colour,
+        )
+
+        require_plotting()
+        if context.protected_df is None or context.protected_df.empty:
+            return None
+        if resolve_task(context) == MULTICLASS:
+            return None
+        try:
+            from fairlearn.metrics import demographic_parity_difference
+        except ImportError:
+            return None
+
+        scores = np.asarray(context.y_pred, dtype=float)
+        if np.all(np.isin(scores, (0.0, 1.0))):
+            return None  # already hard labels — every threshold gives the same split
+
+        configured = self.config.decision_threshold
+        limit = self.config.disparity_threshold
+        # Include the configured cutoff explicitly rather than hoping the grid
+        # lands on it, so the marked point is the verdict, not an interpolation.
+        sweep = np.unique(np.concatenate([np.linspace(0.05, 0.95, 37), [configured]]))
+
+        attributes = list(context.protected_df.columns)
+        ax = new_axes(ax)
+        ax.axhspan(limit, 1.0, color=verdict_colour("BLOCKED"), alpha=0.07, zorder=0)
+        ax.axhline(limit, color=verdict_colour("BLOCKED"), linewidth=1.0, linestyle=":", zorder=1)
+        ax.axvline(configured, color=RULE, linewidth=1.2, zorder=1)
+
+        for colour, marker, attr in zip(
+            categorical(len(attributes)), markers(len(attributes)), attributes
+        ):
+            sensitive = context.protected_df[attr]
+            curve = [
+                abs(
+                    demographic_parity_difference(
+                        context.y_true,
+                        (scores >= t).astype(int),
+                        sensitive_features=sensitive,
+                    )
+                )
+                for t in sweep
+            ]
+            ax.plot(sweep, curve, color=colour, label=attr, zorder=2)
+            at_configured = curve[int(np.argmin(np.abs(sweep - configured)))]
+            ax.scatter(
+                [configured],
+                [at_configured],
+                color=colour,
+                marker=marker,
+                s=70,
+                edgecolor="white",
+                linewidth=0.9,
+                zorder=3,
+            )
+
+        ax.set_xlim(0, 1)
+        ax.set_ylim(bottom=0)
+        ax.set_xlabel("decision threshold")
+        ax.set_ylabel("|demographic parity difference|")
+        ax.set_title("Does the parity verdict survive a change of cutoff?")
+        ax.legend(loc="upper right")
+        caption(
+            ax,
+            "marked points are the verdict as configured. A peak near the cutoff means the\n"
+            "pass was luck: shading is the region that would be reported as a disparity.",
+        )
+        ax.annotate(
+            f"cutoff in force: {configured:g}",
+            xy=(configured, 1),
+            xycoords=("data", "axes fraction"),
+            xytext=(4, -4),
+            textcoords="offset points",
+            va="top",
+            fontsize=8,
+            color=MUTED,
+        )
+        return ax
 
 
 class ShapSubgroupCheck(BaseCheck):

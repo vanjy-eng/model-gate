@@ -52,6 +52,7 @@ class AdversarialRobustnessCheck(BaseCheck):
         config: SecurityConfig | None = None,
         n_samples: int = 200,
         random_state: int = 42,
+        plot_sweep: bool = False,
     ):
         self.config = config or SecurityConfig()
         self.n_samples = n_samples
@@ -59,6 +60,14 @@ class AdversarialRobustnessCheck(BaseCheck):
         # rate. An unseeded gate can land on either side of the threshold
         # between runs, which makes a CI verdict irreproducible.
         self.random_state = random_state
+        # The robustness curve re-scores the whole subsample once per epsilon,
+        # which is real money against a metered endpoint and real minutes
+        # against a slow one. Off unless asked for; `run` is unaffected.
+        self.plot_sweep = plot_sweep
+
+    #: Epsilons the curve is drawn at, as multiples of the configured one, so
+    #: the reported point always falls inside the sweep.
+    SWEEP_MULTIPLES = (0.25, 0.5, 1.0, 2.0, 4.0)
 
     @staticmethod
     def _linear_coefficients(model, feature_names):
@@ -84,23 +93,26 @@ class AdversarialRobustnessCheck(BaseCheck):
         norm = np.linalg.norm(coef)
         return coef / norm if norm > 0 else None
 
-    def run(self, context) -> list[CheckResult]:
+    def _measure(self, context, epsilon: float) -> dict | None:
+        """Perturbs the subsample at `epsilon` and returns the raw movement.
+
+        Extracted from `run` so `plot` can sweep epsilon through *exactly* the
+        code that produced the verdict. A curve drawn by a second
+        implementation agrees with the number until the day it does not, and
+        a chart contradicting the finding beside it is the specific failure
+        this library exists to catch.
+
+        Returns None when there is no numeric feature to perturb.
+        """
         X = context.X
         numeric_cols = X.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) == 0:
-            return [
-                CheckResult(
-                    self.name,
-                    self.category,
-                    "NOT_APPLICABLE",
-                    "no numeric features to perturb",
-                    self.blocking,
-                )
-            ]
+            return None
 
         task = resolve_task(context)
         adapter = ModelAdapter.from_context(context)
-        # Content-addressed, so the verdict does not depend on row order.
+        # Content-addressed, so the verdict does not depend on row order — and
+        # so every point on a sweep scores the same rows as the finding.
         sample = stable_sample(X, self.n_samples, self.random_state)
         base_preds = adapter.predict(sample)
 
@@ -169,7 +181,7 @@ class AdversarialRobustnessCheck(BaseCheck):
             for sign in (1.0, -1.0):
                 perturbed = sample.copy()
                 for col in numeric_cols:
-                    col_scale = perturbed[col].abs() * self.config.adversarial_epsilon
+                    col_scale = perturbed[col].abs() * epsilon
                     step = gradient_sign[:, X.columns.get_loc(col)] * col_scale
                     perturbed[col] = perturbed[col] + sign * step
                 record(adapter.predict(perturbed))
@@ -185,7 +197,7 @@ class AdversarialRobustnessCheck(BaseCheck):
                     # dominated by the largest one, so a sum-insured column in
                     # the millions would shove a 0-10 risk score by thousands —
                     # not the "small relative perturbation" this check applies.
-                    col_scale = float(perturbed[col].abs().mean()) * self.config.adversarial_epsilon
+                    col_scale = float(perturbed[col].abs().mean()) * epsilon
                     # Sign of the coefficient, matching the gradient path: the
                     # direction that changes the score, at full epsilon.
                     step = np.sign(direction[X.columns.get_loc(col)]) * col_scale
@@ -195,16 +207,114 @@ class AdversarialRobustnessCheck(BaseCheck):
             rng = np.random.default_rng(self.random_state)
             for col in numeric_cols:
                 perturbed = sample.copy()
-                noise = (
-                    perturbed[col]
-                    * self.config.adversarial_epsilon
-                    * rng.choice([-1, 1], size=len(perturbed))
-                )
+                noise = perturbed[col] * epsilon * rng.choice([-1, 1], size=len(perturbed))
                 perturbed[col] = perturbed[col] + noise
                 record(adapter.predict(perturbed))
 
+        return {
+            "task": task,
+            "method": method,
+            "epsilon": epsilon,
+            "flip_rate": float(flips.mean()),
+            "relative_shift": float(np.mean(rel_shift)),
+            "mean_rank_shift": float(np.mean(rank_shift)) if base_ranks is not None else None,
+            "max_rank_shift": float(np.max(rank_shift)) if base_ranks is not None else None,
+            "n_classes": len(ordinal_classes) if base_ranks is not None else None,
+        }
+
+    def plot(self, context, results=None, ax=None):
+        """Prediction movement as the perturbation budget grows.
+
+        One epsilon gives one number, and the shape of the approach to it is
+        the risk. Linear decay is a model degrading predictably; flat-then-
+        collapse is a cliff sitting just outside the budget that happened to
+        be configured, and it will be found by whoever looks hardest.
+
+        Opt in with `AdversarialRobustnessCheck(plot_sweep=True)` — each point
+        re-scores the subsample, so this is the one plot in the suite that
+        costs an inference bill.
+        """
+        from ..plots import require_plotting
+        from ..plots.style import ACCENT, MUTED, RULE, new_axes, verdict_colour
+
+        require_plotting()
+        if not self.plot_sweep:
+            logger.debug(
+                "%s.plot skipped: the epsilon sweep re-scores the sample at each point. "
+                "Construct the check with plot_sweep=True to draw it.",
+                self.name,
+            )
+            return None
+
+        configured = self.config.adversarial_epsilon
+        epsilons = sorted({round(configured * m, 10) for m in self.SWEEP_MULTIPLES})
+        measured = [(e, self._measure(context, e)) for e in epsilons]
+        points = [(e, m) for e, m in measured if m is not None]
+        if len(points) < 2:
+            return None
+
+        regression = points[0][1]["task"] == REGRESSION
+        key = "relative_shift" if regression else "flip_rate"
+        limit = (
+            self.config.adversarial_max_relative_shift
+            if regression
+            else self.config.adversarial_flip_rate_threshold
+        )
+        xs = [e for e, _ in points]
+        ys = [m[key] for _, m in points]
+
+        ax = new_axes(ax)
+        ax.axhspan(
+            limit, max(max(ys), limit) * 1.15, color=verdict_colour("BLOCKED"), alpha=0.07, zorder=0
+        )
+        ax.axhline(limit, color=verdict_colour("BLOCKED"), linewidth=1.0, linestyle=":", zorder=1)
+        ax.axvline(configured, color=RULE, linewidth=1.2, zorder=1)
+        ax.plot(xs, ys, color=ACCENT, marker="o", zorder=2)
+
+        at_configured = ys[xs.index(configured)] if configured in xs else None
+        if at_configured is not None:
+            ax.scatter(
+                [configured],
+                [at_configured],
+                s=110,
+                facecolor="white",
+                edgecolor=ACCENT,
+                linewidth=2.0,
+                zorder=3,
+            )
+
+        ax.set_xlabel("epsilon — relative size of the input perturbation")
+        ax.set_ylabel("mean relative prediction shift" if regression else "class flip rate")
+        ax.set_ylim(bottom=0)
+        ax.set_title(f"Robustness under {points[0][1]['method']} perturbation (threshold {limit})")
+        ax.annotate(
+            f"budget in force: {configured:g}",
+            xy=(configured, 1),
+            xycoords=("data", "axes fraction"),
+            xytext=(4, -4),
+            textcoords="offset points",
+            va="top",
+            fontsize=8,
+            color=MUTED,
+        )
+        return ax
+
+    def run(self, context) -> list[CheckResult]:
+        stats = self._measure(context, self.config.adversarial_epsilon)
+        if stats is None:
+            return [
+                CheckResult(
+                    self.name,
+                    self.category,
+                    "NOT_APPLICABLE",
+                    "no numeric features to perturb",
+                    self.blocking,
+                )
+            ]
+        task, method = stats["task"], stats["method"]
+
         if task == REGRESSION:
-            shift = float(np.mean(rel_shift))
+            shift = stats["relative_shift"]
             threshold = self.config.adversarial_max_relative_shift
             flag = "OK" if shift <= threshold else "ROBUSTNESS_RISK"
             return [
@@ -228,7 +338,7 @@ class AdversarialRobustnessCheck(BaseCheck):
                 )
             ]
 
-        flip_rate = float(flips.mean())
+        flip_rate = stats["flip_rate"]
         over_flip_rate = flip_rate > self.config.adversarial_flip_rate_threshold
         metadata = {
             "flip_rate": round(flip_rate, 4),
@@ -242,21 +352,21 @@ class AdversarialRobustnessCheck(BaseCheck):
         )
 
         over_rank_shift = False
-        if base_ranks is not None:
-            mean_rank_shift = float(np.mean(rank_shift))
+        if stats["mean_rank_shift"] is not None:
+            mean_rank_shift = stats["mean_rank_shift"]
             over_rank_shift = mean_rank_shift > self.config.adversarial_max_rank_shift
             metadata.update(
                 {
                     "mean_rank_shift": round(mean_rank_shift, 4),
-                    "max_observed_rank_shift": round(float(np.max(rank_shift)), 4),
+                    "max_observed_rank_shift": round(stats["max_rank_shift"], 4),
                     "rank_shift_threshold": self.config.adversarial_max_rank_shift,
-                    "n_classes": len(ordinal_classes),
+                    "n_classes": stats["n_classes"],
                 }
             )
             detail += (
                 f"; mean ordinal rank shift={mean_rank_shift:.4f} "
                 f"(max {self.config.adversarial_max_rank_shift}), worst "
-                f"{float(np.max(rank_shift)):.0f} step(s)"
+                f"{stats['max_rank_shift']:.0f} step(s)"
             )
 
         flag = "ROBUSTNESS_RISK" if (over_flip_rate or over_rank_shift) else "OK"

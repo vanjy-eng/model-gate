@@ -24,11 +24,11 @@ from __future__ import annotations
 import numpy as np
 
 from .._logging import get_logger
-from ..calibration import brier_decomposition, expected_calibration_error
+from ..calibration import brier_decomposition, calibration_curve, expected_calibration_error
 from ..classes import favourable_mask, resolve_favourable
 from ..config import FairnessConfig, PerformanceConfig
 from ..core.base import BaseCheck, CheckResult
-from ..groups import iter_protected
+from ..groups import group_series, iter_protected
 from ..metrics import to_class_labels
 from ..task import CLASSIFICATION_TASKS, MULTICLASS, resolve_task
 
@@ -159,6 +159,87 @@ class CalibrationCheck(BaseCheck):
             )
         ]
 
+    def plot(self, context, results=None, ax=None):
+        """Reliability diagram — observed frequency against predicted.
+
+        The clearest case in the suite for a chart over a number. Two models
+        with an identical ECE can be miscalibrated in opposite ways: one
+        confident only at the top of the range, another wrong throughout.
+        They need different fixes, and no scalar separates them.
+        """
+        from ..plots import require_plotting
+        from ..plots.style import ACCENT, MUTED, RULE, caption, new_axes
+
+        require_plotting()
+        task = resolve_task(context)
+        probabilities = _positive_probability(context, task)
+        if probabilities is None or context.y_true is None:
+            return None
+
+        curve = calibration_curve(
+            _binary_actuals(context, task),
+            probabilities,
+            n_bins=self.config.n_calibration_bins,
+            strategy=self.config.calibration_strategy,
+        )
+        populated = curve.populated
+        if not populated.any():
+            return None
+
+        # Square, and square deliberately: the whole reading of this diagram
+        # is vertical distance from y = x, and a rectangular one flattens or
+        # exaggerates that distance depending on the aspect it happens to get.
+        ax = new_axes(ax, figsize=(5.0, 5.0))
+        ax.set_box_aspect(1)
+        ax.plot([0, 1], [0, 1], color=RULE, linewidth=1.2, linestyle="--", zorder=1)
+        ax.annotate(
+            "perfectly calibrated",
+            xy=(0.82, 0.82),
+            xytext=(0, 5),
+            textcoords="offset points",
+            color=MUTED,
+            fontsize=8,
+            ha="center",
+            rotation=45,
+            rotation_mode="anchor",
+        )
+
+        # Marker area tracks bin population. A bin holding four rows must not
+        # read as strongly as one holding four hundred — the eye weights by
+        # area, and an equal-sized dot invites a conclusion the data cannot
+        # support. It is the same reason `CalibrationCurve` carries `count`.
+        counts = curve.count[populated]
+        sizes = 18 + 170 * (counts / max(counts.max(), 1))
+
+        ax.plot(
+            curve.predicted[populated],
+            curve.observed[populated],
+            color=ACCENT,
+            linewidth=1.8,
+            zorder=2,
+        )
+        ax.scatter(
+            curve.predicted[populated],
+            curve.observed[populated],
+            s=sizes,
+            color=ACCENT,
+            edgecolor="white",
+            linewidth=0.8,
+            zorder=3,
+        )
+
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_xlabel("predicted probability")
+        ax.set_ylabel("observed frequency")
+        ax.set_title("Reliability — point area is the number of observations")
+        caption(
+            ax,
+            "below the line: the model promises more than it delivers.\n"
+            "above it: it is under-confident.",
+        )
+        return ax
+
 
 class SubgroupCalibrationCheck(BaseCheck):
     """Sufficiency: does a score of 0.7 mean the same thing for every group?
@@ -259,6 +340,73 @@ class SubgroupCalibrationCheck(BaseCheck):
                 self.blocking,
             )
         ]
+
+    def plot(self, context, results=None, ax=None):
+        """One reliability curve per group, for the worst-affected attribute.
+
+        This is where the aggregate hides a minority: a line sagging below the
+        diagonal for one group while another sits on it is a sufficiency
+        failure that four ECE numbers state but do not show.
+        """
+        from ..plots import require_plotting, worst_result
+        from ..plots.style import RULE, caption, categorical, markers, new_axes
+
+        require_plotting()
+        if context.protected_df is None or context.protected_df.empty:
+            return None
+        task = resolve_task(context)
+        probabilities = _positive_probability(context, task)
+        if probabilities is None or context.y_true is None:
+            return None
+
+        results = self.run(context) if results is None else results
+        finding = worst_result(results, "ece_gap")
+        if finding is None:
+            return None
+        label = finding.metadata["protected_attr"]
+        groups = group_series(context.protected_df, label, self.config.min_group_size)
+        if groups is None:
+            return None
+
+        # Draw exactly the groups that were scored — `group_ece` is the
+        # finding, so anything absent from it was excluded as too small and
+        # must not appear as a line the reader could read a gap off.
+        scored = list(finding.metadata["group_ece"])
+        actuals = _binary_actuals(context, task)
+
+        ax = new_axes(ax, figsize=(5.0, 5.0))
+        ax.set_box_aspect(1)  # see CalibrationCheck.plot
+        ax.plot([0, 1], [0, 1], color=RULE, linewidth=1.2, linestyle="--", zorder=1)
+
+        for colour, marker, value in zip(categorical(len(scored)), markers(len(scored)), scored):
+            mask = np.asarray(groups.astype(str) == value)
+            curve = calibration_curve(
+                actuals[mask],
+                probabilities[mask],
+                n_bins=self.config.n_calibration_bins,
+            )
+            populated = curve.populated
+            ax.plot(
+                curve.predicted[populated],
+                curve.observed[populated],
+                color=colour,
+                marker=marker,
+                label=f"{value} — ECE {finding.metadata['group_ece'][value]:.3f}",
+                zorder=2,
+            )
+
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(-0.02, 1.02)
+        ax.set_xlabel("predicted probability")
+        ax.set_ylabel("observed frequency")
+        ax.set_title(f"Calibration by {label} — a score should mean the same for everyone")
+        ax.legend(loc="upper left")
+        caption(
+            ax,
+            "lines apart from each other: the same score carries a different real risk\n"
+            "depending on the group — sufficiency fails even where the average looks fine.",
+        )
+        return ax
 
 
 class EqualisedOddsCheck(BaseCheck):
@@ -420,6 +568,89 @@ class EqualisedOddsCheck(BaseCheck):
                 self.blocking,
             )
         ]
+
+    def plot(self, context, results=None, ax=None):
+        """True- and false-positive rate side by side, per group.
+
+        Equal opportunity is the spread of the solid bars alone; equalised
+        odds is the wider of the two spreads. Which notion a model fails, and
+        by how much, is legible here in a way two numbers in a table are not —
+        and a model can pass one while failing the other badly.
+        """
+        from ..plots import require_plotting, worst_result
+        from ..plots.style import HATCHES, caption, categorical, new_axes
+
+        require_plotting()
+        results = self.run(context) if results is None else results
+
+        finding = worst_result(results, "equalised_odds_difference")
+        if finding is None:
+            return None
+        attribute = finding.metadata["protected_attr"]
+        # `group_tpr` lives on the equal-opportunity result and `group_fpr` on
+        # the equalised-odds one, so the pair has to be rejoined by attribute.
+        opportunity = next(
+            (
+                r
+                for r in results
+                if r.metadata.get("notion") == "equal_opportunity"
+                and r.metadata.get("protected_attr") == attribute
+            ),
+            None,
+        )
+        if opportunity is None:
+            return None
+
+        tprs = opportunity.metadata["group_tpr"]
+        fprs = finding.metadata["group_fpr"]
+        groups = [g for g in tprs if g in fprs]
+        if len(groups) < 2:
+            return None
+
+        positions = np.arange(len(groups), dtype=float)
+        width = 0.36
+        colours = categorical(2)
+
+        ax = new_axes(ax)
+        ax.bar(
+            positions - width / 2,
+            [tprs[g] for g in groups],
+            width,
+            label="true positive rate",
+            color=colours[0],
+            edgecolor="white",
+        )
+        ax.bar(
+            positions + width / 2,
+            [fprs[g] for g in groups],
+            width,
+            label="false positive rate",
+            color=colours[1],
+            edgecolor="white",
+            # Hatching so the pair survives a greyscale print, where two
+            # colour-blind-safe hues become two identical greys.
+            hatch=HATCHES[1],
+        )
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(groups)
+        # Pinned to the full range of a rate, never autoscaled. Zooming to the
+        # data would render a 0.01 gap as the height of the panel, and this
+        # chart is read by people deciding whether a gap is serious.
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("rate")
+        ax.set_title(
+            f"Error rates by {attribute} — widest gap "
+            f"{finding.metadata['equalised_odds_difference']:.3f} "
+            f"(max {finding.metadata['threshold']})"
+        )
+        ax.legend(loc="upper right")
+        caption(
+            ax,
+            "equal opportunity compares the solid bars only;\n"
+            "equalised odds takes the wider of the two gaps.",
+        )
+        return ax
 
 
 __all__ = ["CalibrationCheck", "EqualisedOddsCheck", "SubgroupCalibrationCheck"]

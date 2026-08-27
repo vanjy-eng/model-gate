@@ -98,6 +98,11 @@ class ModelGate:
 
         metric, score = self._headline_score(results)
         report = GateReport(results=results, model_metric=metric, model_score=score, task=task)
+        # Handed to the report so `to_html()` can ask each check to draw
+        # itself. Deliberately not part of the serialised record — see the
+        # field comments on GateReport.
+        report._checks = self.checks
+        report._context = context
         logger.info(
             "gate_status=%s task=%s n_flags=%d metric=%s score=%s",
             report.gate_status,

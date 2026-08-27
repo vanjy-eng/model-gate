@@ -66,8 +66,47 @@ jobs:
           cache: pip
       - name: Install without the structured extra
         run: pip install -e ".[dev,yaml,toml]"
+      - name: Remove the plotting stack
+        # matplotlib and seaborn are in `dev` on purpose, so a contributor
+        # running the suite locally exercises the charts. Here they have to go:
+        # this job's whole purpose is to prove the library works without its
+        # optional extras, and `plot()` raising a clear GateConfigurationError
+        # while the HTML report degrades to text is part of that promise.
+        run: pip uninstall -y matplotlib seaborn
       - name: Pytest
         run: pytest -q --no-cov
+      - name: The report still renders without charts
+        run: |
+          python - <<'PY'
+          import numpy as np, pandas as pd
+          from bdp_model_gate import ModelGate, StructuredGateContext
+          from bdp_model_gate.exceptions import GateConfigurationError
+          from bdp_model_gate.plots import plotting_available, require_plotting
+
+          assert not plotting_available()
+          try:
+              require_plotting()
+          except GateConfigurationError as exc:
+              assert "[plots]" in str(exc), exc
+          else:
+              raise AssertionError("require_plotting must raise without the extra")
+
+          rng = np.random.default_rng(0)
+          X = pd.DataFrame({"a": rng.normal(size=200), "b": rng.normal(size=200)})
+          y = (X["a"] > 0).astype(int).to_numpy()
+          report = ModelGate().run(
+              StructuredGateContext(
+                  model=None, X=X, y_true=y, y_pred=y.astype(float),
+                  protected_df=pd.DataFrame({"g": rng.choice(["x", "y"], 200)}),
+                  predict_fn=lambda frame: np.zeros(len(frame)),
+              )
+          )
+          page = report.to_html()
+          assert "<svg" not in page, "charts rendered without matplotlib"
+          for r in report.results:
+              assert r.check_name in page, r.check_name
+          print("text-only report renders every finding")
+          PY
 
   mutation:
     # Non-blocking for now: it reports how many mutants the suite kills, which

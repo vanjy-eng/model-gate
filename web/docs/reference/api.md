@@ -56,6 +56,26 @@ Generated from the source, so it cannot drift from the code.
 
 ::: bdp_model_gate.structured.security
 
+## Plotting and reports
+
+See [Plots](plots.md) and [Reports](reports.md) for the guides.
+
+::: bdp_model_gate.reporting
+    options:
+      members: [render_html]
+
+::: bdp_model_gate.plots
+    options:
+      members: [require_plotting, plotting_available, worst_result]
+
+::: bdp_model_gate.groups
+    options:
+      members: [iter_protected, group_series]
+
+::: bdp_model_gate.calibration
+    options:
+      members: [calibration_curve, expected_calibration_error, brier_score, brier_decomposition, CalibrationCurve]
+
 ## Registry and errors
 
 ::: bdp_model_gate.registry
