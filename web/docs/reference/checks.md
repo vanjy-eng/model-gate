@@ -14,6 +14,13 @@ Flags route to <span class="verdict-review">NEEDS_REVIEW</span>, not
 | `disparate_impact` | binary, multiclass | `DISPARITY_RISK` |
 | `shap_subgroup_gap` | all | `SUBGROUP_IMPACT_RISK` |
 | `counterfactual_flip` | binary, multiclass | `COUNTERFACTUAL_RISK` |
+| `equalised_odds` | binary, multiclass | `EQUAL_OPPORTUNITY_RISK`, `EQUALISED_ODDS_RISK` |
+| `subgroup_calibration` | binary, multiclass | `SUBGROUP_CALIBRATION_RISK` |
+
+The last two are new in 0.5.0 and cover *separation* and *sufficiency*; the
+four above them all measure *independence*. See
+[Fairness: three families](../tasks/fairness.md) — the three are mutually
+incompatible, so reporting one without the others makes a choice silently.
 
 ### `proxy_correlation`
 
@@ -72,6 +79,16 @@ risk-based pricing.
 
 With none of those inputs it reports `NOT_APPLICABLE` rather than passing
 vacuously.
+
+### `calibration`
+
+Do the stated probabilities match observed frequencies? Expected Calibration
+Error against `max_ece`, plus Murphy's decomposition into reliability,
+resolution and uncertainty.
+
+Independent of discrimination: a model can rank perfectly while every
+probability is twice too high. Blocking, but with a permissive default —
+see [Fairness: three families](../tasks/fairness.md#overall-calibration-calibration).
 
 ## Compliance — blocking
 

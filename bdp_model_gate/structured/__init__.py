@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from ..config import GateConfig
+from .calibration_checks import (
+    CalibrationCheck,
+    EqualisedOddsCheck,
+    SubgroupCalibrationCheck,
+)
 from .compliance import ComplianceMappingCheck
 from .fairness import (
     CounterfactualFlipCheck,
@@ -39,11 +44,17 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         DisparateImpactCheck(config.fairness),
         ShapSubgroupCheck(config.fairness),
         CounterfactualFlipCheck(config.fairness),
+        # Separation and sufficiency. Reported alongside demographic parity
+        # because the three are mutually incompatible — presenting only one
+        # would make the choice silently.
+        EqualisedOddsCheck(config.fairness),
+        SubgroupCalibrationCheck(config.fairness),
         GroupMeanGapCheck(config.fairness),
         ErrorParityCheck(config.fairness),
         CalibrationParityCheck(config.fairness),
         LossRatioParityCheck(config.fairness),
         PerformanceThresholdCheck(config.performance),
+        CalibrationCheck(config.performance),
         ComplianceMappingCheck(config.compliance),
         AdversarialRobustnessCheck(config.security),
         PIILeakageCheck(config.security),
@@ -57,7 +68,10 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
 
 
 __all__ = [
+    "CalibrationCheck",
     "CalibrationParityCheck",
+    "EqualisedOddsCheck",
+    "SubgroupCalibrationCheck",
     "ErrorParityCheck",
     "GroupMeanGapCheck",
     "LossRatioParityCheck",

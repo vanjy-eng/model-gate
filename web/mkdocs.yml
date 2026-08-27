@@ -99,6 +99,7 @@ nav:
   - Concepts: concepts.md
   - Tasks:
       - Binary classification: tasks/binary.md
+      - Fairness — three families: tasks/fairness.md
       - Multiclass and ordinal: tasks/multiclass.md
       - Regression: tasks/regression.md
   - Any model: models.md

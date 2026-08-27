@@ -34,6 +34,14 @@ class FairnessConfig:
     # All four are *relative* gaps, expressed as a fraction of the overall
     # figure, so one set of defaults works whether the target is naira
     # premiums or claim counts.
+    # --- separation and sufficiency (see bdp_model_gate.structured.fairness) ---
+    equalised_odds_threshold: float = 0.10  # max TPR or FPR difference across groups
+    subgroup_calibration_threshold: float = 0.05  # max ECE difference across groups
+    n_calibration_bins: int = 10  # bins per group for subgroup calibration
+    # Harm concentrates at intersections: a model can look fair on gender and
+    # on region while failing badly for women in one region. Off by default
+    # because the joint groups are smaller and the reading needs care.
+    intersectional: bool = False
     mean_gap_threshold: float = 0.10  # max relative gap in group mean prediction
     error_parity_threshold: float = 0.20  # max relative gap in per-group error
     calibration_threshold: float = 0.10  # max relative predicted-vs-actual gap per group
@@ -77,6 +85,13 @@ class PerformanceConfig:
     metric: MetricSetting = AUTO
     min_score: float = 0.80
     max_error: float | None = None
+    # Calibration. Deliberately permissive: plenty of good models are
+    # uncalibrated by construction (an SVM's decision function, say), and a
+    # gate that blocks all of them gets switched off. Tighten it for pricing,
+    # where a systematically inflated probability misprices every policy.
+    max_ece: float = 0.10
+    n_calibration_bins: int = 10
+    calibration_strategy: str = "uniform"  # or "quantile", for skewed scores
     decision_threshold: float = 0.5
     average: str = "macro"
     max_latency_ms_p95: float = 200.0

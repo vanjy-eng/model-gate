@@ -47,6 +47,10 @@ VALID_FLAGS = {
     "ROBUSTNESS_RISK",
     "PII_LEAKAGE_RISK",
     "INJECTION_RISK",
+    # 0.5.0 — separation and sufficiency
+    "SUBGROUP_CALIBRATION_RISK",
+    "EQUAL_OPPORTUNITY_RISK",
+    "EQUALISED_ODDS_RISK",
 }
 
 CLASSIFIERS = {

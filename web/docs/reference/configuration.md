@@ -25,6 +25,9 @@ report = ModelGate(checks=default_structured_checks(config)).run(context)
 | `max_error` | `None` | for error metrics — **required** when one is selected |
 | `decision_threshold` | `0.5` | binarises continuous predictions for label metrics |
 | `average` | `"macro"` | multiclass averaging for f1 / precision / recall |
+| `max_ece` | `0.10` | calibration; permissive on purpose |
+| `n_calibration_bins` | `10` | |
+| `calibration_strategy` | `"uniform"` | or `"quantile"`, for skewed scores |
 | `max_latency_ms_p95` | `200.0` | |
 | `max_cost_per_inference` | `0.002` | |
 
@@ -41,6 +44,9 @@ report = ModelGate(checks=default_structured_checks(config)).run(context)
 | `error_parity_threshold` | `0.20` | regression, relative |
 | `calibration_threshold` | `0.10` | regression, relative |
 | `loss_ratio_threshold` | `0.10` | regression, relative |
+| `equalised_odds_threshold` | `0.10` | max TPR or FPR difference (separation) |
+| `subgroup_calibration_threshold` | `0.05` | max ECE difference (sufficiency) |
+| `intersectional` | `False` | also evaluate pairwise attribute combinations |
 | `min_group_size` | `30` | groups below this are reported, not scored |
 
 !!! note "All gap thresholds are relative"
