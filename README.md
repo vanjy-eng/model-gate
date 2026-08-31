@@ -648,10 +648,14 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 Each release ships as a complete slice: implementation, tests, example
 notebooks, and the documentation pages that describe it.
 
-## Development
+## Contributing
+
+Issues, fixes, checks, docs and examples are all welcome. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the development setup, the testing
+standards, and how to add a check or a plot.
 
 ```bash
-pip install -e ".[dev,structured]"
+pip install -e ".[dev,structured,plots,yaml,toml]"
 
 ruff check .              # lint
 ruff format .             # format
@@ -659,28 +663,9 @@ mypy bdp_model_gate       # type check
 pytest -q                 # test (85% coverage floor enforced)
 ```
 
-`.pre-commit-config.yaml` runs ruff, mypy, and basic hygiene checks on
-every commit — install with `pip install pre-commit && pre-commit install`.
-
-CI (`.github/workflows/ci.yml`) runs lint, type-check, and the test suite
-across Python 3.9–3.12 on every push/PR, plus a **core-install job** with
-no `structured` extra — that job is what keeps the graceful-degradation
-paths (`NOT_APPLICABLE` results, metric fallback) honest. Tests that need
-a real estimator `importorskip` on scikit-learn rather than failing there.
-
-The matrix covers the whole `requires-python` range. Note
-`[tool.mypy] python_version` is pinned to 3.12 for numpy's stubs, so the
-type checker cannot enforce the 3.9 floor. Three other things do: ruff's
-`FA` rules (which flag PEP 604 / PEP 585 syntax used without
-`from __future__ import annotations` — evaluated at runtime on 3.9, and an
-import-time `TypeError` there while passing silently on 3.10+), an AST test
-in `tests/test_package.py` covering the same pattern, and the 3.9 job in the
-matrix. Note that `target-version = "py39"` on its own does **not** imply
-those checks.
-
-This is all separate from `ci_examples/`, which are pre-deployment gates
-for models *built by* consumers of this library, not for the library's own
-code.
+One thing worth knowing before you read further: the failure this project
+guards against is not a crash but a **confident, wrong, green number**. That
+shapes most of the conventions, and `CONTRIBUTING.md` explains them.
 
 ## Examples
 
