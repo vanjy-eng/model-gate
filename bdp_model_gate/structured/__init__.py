@@ -25,6 +25,13 @@ from .security import (
     PIILeakageCheck,
     PromptInjectionCheck,
 )
+from .validation_checks import (
+    FeatureContractCheck,
+    FeatureDriftCheck,
+    LeakageCheck,
+    SplitOverlapCheck,
+    ValidationStrategyCheck,
+)
 
 
 def default_structured_checks(config: GateConfig | None = None, include_plugins: bool = True):
@@ -40,6 +47,14 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
     """
     config = config or GateConfig()
     checks = [
+        # Validation first. A finding here says the evidence behind every
+        # other number in the report is unsound, which is a strictly prior
+        # question to whether the model is any good.
+        LeakageCheck(config.validation),
+        SplitOverlapCheck(config.validation),
+        ValidationStrategyCheck(config.validation, config.compliance),
+        FeatureContractCheck(config.validation),
+        FeatureDriftCheck(config.validation),
         ProxyCorrelationCheck(config.fairness),
         DisparateImpactCheck(config.fairness),
         ShapSubgroupCheck(config.fairness),
@@ -68,6 +83,11 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
 
 
 __all__ = [
+    "FeatureContractCheck",
+    "FeatureDriftCheck",
+    "LeakageCheck",
+    "SplitOverlapCheck",
+    "ValidationStrategyCheck",
     "CalibrationCheck",
     "CalibrationParityCheck",
     "EqualisedOddsCheck",

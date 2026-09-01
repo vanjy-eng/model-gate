@@ -1,7 +1,8 @@
 # BDP Model Gate
 
 Automated **pre-deployment governance** for machine-learning models. Fairness,
-performance, compliance and security checks run as a single gate that returns
+performance, compliance, security and validation-methodology checks run as a
+single gate that returns
 one status your pipeline can branch on.
 
 <span class="verdict-pass">PASS</span> deploy ·
@@ -40,11 +41,18 @@ sign it off.
 
 | Category | Blocking | Checks |
 |---|---|---|
+| Validation | Yes | target leakage, split overlap, validation strategy, feature contract, feature drift (review) |
 | Fairness | No → review | proxy correlation, demographic parity, SHAP subgroup gaps, counterfactual flip, equalised odds, subgroup calibration |
 | Fairness (regression) | No → review | loss-ratio parity, group mean gap, error parity, calibration parity |
 | Performance | Yes | model score, calibration, p95 latency, cost per inference |
 | Compliance | Yes | model-card completeness, DPIA trigger, explainability requirement |
 | Security | Yes | adversarial robustness, PII leakage, prompt injection |
+
+Validation comes first on purpose. A performance finding says the model is not
+good enough; a validation finding says you do not yet know whether it is — and
+nothing stops you passing the training set as the validation set, which used
+to report a superb score and a clean `PASS`. See
+[Concepts](concepts.md#is-the-evidence-sound).
 
 Fairness is deliberately non-blocking. Those findings frequently need human
 judgement, so they route to a reviewer rather than failing a build — which is

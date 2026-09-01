@@ -7,7 +7,8 @@
 **📖 [Documentation](https://vanjy-eng.github.io/model-gate/)** — guide, API reference and runnable examples.
 
 Automated pre-deployment ML model governance: fairness, performance,
-compliance, and security checks, run as a single gate that gives you a
+compliance, security and validation-methodology checks, run as a single
+gate that gives you a
 `PASS` / `NEEDS_REVIEW` / `BLOCKED` status to wire into CI before a model
 is promoted to production.
 
@@ -56,6 +57,7 @@ context = StructuredGateContext(
     y_true=y_val,
     y_pred=y_pred,
     protected_df=protected_val,  # optional — enables fairness checks
+    X_train=X_train,  # optional — enables split-overlap and drift checks
     latencies_ms=benchmark_latencies,  # optional — enables performance checks
     cost_per_inference=0.0008,  # optional
     model_card=my_model_card,  # optional — enables compliance checks
@@ -85,6 +87,25 @@ report = run_structured_gate(model, X_val, y_val, y_pred, protected_df=protected
 ```
 
 ## What each category checks
+
+**Validation** (blocking — and reported first)
+- `LeakageCheck` — a feature whose solo predictive power rivals the whole
+  model's, the signature of a leaked target
+- `SplitOverlapCheck` — rows the model has already seen, plus duplicates
+  within the validation set
+- `ValidationStrategyCheck` — was the holdout separated in time, or at
+  random? Out-of-time is required for high-risk use cases
+- `FeatureContractCheck` — the columns the model was fitted on, in the order
+  it expects them
+- `FeatureDriftCheck` — train-serve skew (non-blocking: an out-of-time
+  holdout *should* differ a little)
+
+Nothing used to stop you passing the **training set** as the validation set.
+The gate reported a superb score and `PASS`, and every fairness figure beside
+it was measured on data the model had memorised. A performance finding says
+the model is not good enough; a validation finding says you do not yet know
+whether it is, which is a prior question — so these block, and lead the
+report.
 
 **Fairness** (non-blocking by default — routes to `NEEDS_REVIEW`, since some
 flags need human judgment)
@@ -219,7 +240,7 @@ from bdp_model_gate import BaseCheck, CheckResult
 
 class MyCustomCheck(BaseCheck):
     name = "my_custom_check"
-    category = "compliance"  # fairness | performance | compliance | security
+    category = "compliance"  # validation | fairness | performance | compliance | security
     blocking = True
 
     def run(self, context):
@@ -638,7 +659,6 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.5.2** | Validation methodology — leakage detection, out-of-time holdouts, feature-list checks. |
 | **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
 | **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
 | **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |

@@ -13,26 +13,10 @@ from ..core.base import BaseCheck, CheckResult
 from ..exceptions import GateConfigurationError
 from ..metrics import to_class_labels, to_hard_labels
 from ..model import ModelAdapter
+from ..stats import correlation_ratio
 from ..task import ALL_TASKS, CLASSIFICATION_TASKS, MULTICLASS, resolve_task
 
 logger = get_logger("fairness")
-
-
-def _correlation_ratio(values: pd.Series, groups: pd.Series) -> float:
-    """eta^2: the share of a feature's variance explained by group membership.
-
-    0 means the feature's distribution is identical across groups; 1 means
-    knowing the group tells you the feature exactly. Unlike a Pearson
-    correlation it needs no ordering on the groups, which is what makes it
-    the right statistic against a categorical protected attribute.
-    """
-    overall_mean = values.mean()
-    ss_between = sum(
-        len(values[groups == g]) * (values[groups == g].mean() - overall_mean) ** 2
-        for g in groups.unique()
-    )
-    ss_total = ((values - overall_mean) ** 2).sum()
-    return float(ss_between / ss_total) if ss_total > 0 else 0.0
 
 
 class ProxyCorrelationCheck(BaseCheck):
@@ -63,7 +47,7 @@ class ProxyCorrelationCheck(BaseCheck):
         features = [c for c in X.columns if X[c].dtype.kind in "if"]
         attributes = [c for c in protected_df.columns if protected_df[c].nunique() < 10]
         return pd.DataFrame(
-            [[_correlation_ratio(X[f], protected_df[a]) for a in attributes] for f in features],
+            [[correlation_ratio(X[f], protected_df[a]) for a in attributes] for f in features],
             index=features,
             columns=attributes,
             dtype=float,

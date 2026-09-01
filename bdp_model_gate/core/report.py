@@ -144,7 +144,9 @@ class GateReport:
         lines = [f"Gate status: {self.gate_status} ({self.total_duration_ms:.0f}ms{task_note})"]
         if self.model_metric is not None and self.model_score is not None:
             lines.append(f"  {self.model_metric}: {self.model_score:.4f}")
-        for category in ("performance", "compliance", "security", "fairness"):
+        # Validation leads: a finding there means the numbers below it were
+        # measured on evidence that does not support them.
+        for category in ("validation", "performance", "compliance", "security", "fairness"):
             cat_flags = [r for r in self.by_category(category) if not r.is_ok]
             lines.append(f"  {category}: {len(cat_flags)} flag(s)")
         return "\n".join(lines)

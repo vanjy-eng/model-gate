@@ -55,10 +55,16 @@ def load_scorer():
 | `--data PATH` | CSV of validation data — **required** |
 | `--target-col NAME` | ground-truth column — **required** |
 | `--protected PATH` | CSV of protected attributes, row-aligned |
+| `--train-data PATH` | CSV of the **training** features — unlocks split-overlap and drift |
 | `--expected-loss-col NAME` | column holding per-row expected loss |
 | `--latencies PATH` | one latency in ms per line |
 | `--cost-per-inference FLOAT` | |
 | `--model-card PATH` | JSON model card |
+
+`--train-data` reads columns and distributions only, never labels: the target
+column is dropped if present, and the two frames need no row alignment. Give
+it and the [validation checks](checks.md#validation-blocking) can tell you
+whether the model has already seen the rows it is being graded on.
 
 ### Task and scoring
 

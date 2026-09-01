@@ -31,9 +31,12 @@ from .core.base import BaseCheck
 
 logger = get_logger("reporting")
 
-#: Order categories are presented in: what stops a deploy outright first,
-#: then what a human has to weigh.
-CATEGORY_ORDER = ("performance", "compliance", "security", "fairness")
+#: Order categories are presented in. Validation first, because a finding
+#: there says the evidence behind everything below it is unsound — a model
+#: graded on its own training data reports a superb score and a clean
+#: calibration curve. Then what stops a deploy outright, then what a human
+#: has to weigh.
+CATEGORY_ORDER = ("validation", "performance", "compliance", "security", "fairness")
 
 _VERDICT_BLURB = {
     "PASS": "Every check passed. No action required before promotion.",

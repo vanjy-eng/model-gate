@@ -145,6 +145,71 @@ class ComplianceConfig:
 
 
 @dataclass
+class ValidationConfig:
+    """Thresholds for the checks that ask whether the evaluation itself is sound.
+
+    Nothing else in the report means anything if these fail. A model scored
+    on its own training data reports a superb AUC and a clean `PASS`, and
+    every fairness and calibration number beside it is measured on data the
+    model has memorised.
+
+    `leakage_min_power` is the guard that keeps the leak check usable. Parity
+    between a feature and the model is only suspicious when the model is
+    actually good: on a model scoring 0.55, a feature scoring 0.54 reaches
+    99% of it and means nothing. Both conditions must hold before anything is
+    flagged.
+    """
+
+    #: A feature is a suspected leak when its solo discriminative power
+    #: reaches this fraction of the whole model's — one column should not do
+    #: what the model does.
+    leakage_ratio: float = 0.95
+    #: ...and only when that power is high in absolute terms. Expressed on the
+    #: same 0–1 scale as the ratio: |2·AUC − 1| for classification, |r| for
+    #: regression. 0.80 is a Gini of 0.80, which no ordinary single feature
+    #: reaches honestly.
+    leakage_min_power: float = 0.80
+    #: Rows appearing in both the training and validation frames, as a
+    #: fraction of the validation set. Not zero by default: identical feature
+    #: vectors legitimately recur in data with few categorical levels.
+    max_split_overlap: float = 0.01
+    #: Exact duplicate rows *within* the validation set. Duplicates inflate
+    #: every metric by weighting the same observation twice.
+    max_duplicate_fraction: float = 0.05
+    #: Standardised mean shift between training and validation for a numeric
+    #: feature — the difference in means over the training standard
+    #: deviation, so it is unitless. 0.25 is a small-to-moderate effect.
+    drift_threshold: float = 0.25
+    #: For a categorical feature: total variation distance between the two
+    #: frequency tables, on 0–1.
+    categorical_drift_threshold: float = 0.15
+    #: Values of `model_card["validation_strategy"]` that count as a holdout
+    #: separated in *time* rather than at random.
+    out_of_time_strategies: list[str] = field(
+        default_factory=lambda: ["out_of_time", "temporal", "forward_chaining", "walk_forward"]
+    )
+    #: Everything else the field is allowed to say. An unrecognised value is
+    #: flagged rather than accepted, because "holdout" and "out_of_time" are
+    #: different claims and only one of them is checkable.
+    accepted_validation_strategies: list[str] = field(
+        default_factory=lambda: [
+            "out_of_time",
+            "temporal",
+            "forward_chaining",
+            "walk_forward",
+            "random_split",
+            "stratified_split",
+            "cross_validation",
+            "grouped_split",
+        ]
+    )
+    #: A random split is the wrong test for a model that will be applied to
+    #: next quarter's business. Enforced only for the high-risk use cases in
+    #: `ComplianceConfig`.
+    require_out_of_time_for_high_risk: bool = True
+
+
+@dataclass
 class SecurityConfig:
     adversarial_epsilon: float = 0.02
     adversarial_flip_rate_threshold: float = 0.05
@@ -179,3 +244,4 @@ class GateConfig:
     performance: PerformanceConfig = field(default_factory=PerformanceConfig)
     compliance: ComplianceConfig = field(default_factory=ComplianceConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    validation: ValidationConfig = field(default_factory=ValidationConfig)

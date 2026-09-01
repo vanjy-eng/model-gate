@@ -47,6 +47,7 @@ is built around:
 - No `protected_df` → fairness checks report `NOT_APPLICABLE`
 - No `model_card` → the compliance check reports `NOT_APPLICABLE`
 - No `expected_loss` → loss-ratio parity reports `NOT_APPLICABLE`
+- No `X_train` → split overlap and drift report `NOT_APPLICABLE`
 - `task="regression"` → classification-only checks report `NOT_APPLICABLE`
 - shap not installed → the SHAP check reports `NOT_APPLICABLE`
 
@@ -54,6 +55,58 @@ Skipped checks stay **in the report** rather than disappearing, each with the
 reason. A reviewer can see what was not evaluated, which matters more than it
 sounds: a governance report that silently omits a check is worse than one that
 says it was skipped.
+
+## Is the evidence sound?
+
+Every other number in a report rests on one assumption: that the validation
+set is a fair test. Nothing used to check it.
+
+Pass the **training set** as the validation set and the gate would report an
+AUC of 0.99, a clean calibration curve and `PASS`. Every fairness figure
+beside it would be measured on data the model had memorised. The verdict would
+be confident, green, and worthless.
+
+So `validation` is its own category, it **blocks**, and it is reported
+**first**. The distinction is worth stating plainly:
+
+> A **performance** finding says *the model is not good enough*.
+> A **validation** finding says *you do not yet know whether it is*.
+
+The second is a prior question. If it fires, nothing underneath it means what
+it appears to mean.
+
+```python
+context = StructuredGateContext(
+    model=model,
+    X=X_val,
+    y_true=y_val,
+    y_pred=y_pred,
+    X_train=X_train,  # unlocks split overlap and train-serve skew
+    model_card={
+        "use_case": "credit_scoring",
+        "validation_strategy": "out_of_time",  # required, and checked
+        ...
+    },
+)
+```
+
+`X_train` does not need to be row-aligned to anything — only its columns and
+distributions are read, never its labels. Without it, two of the five checks
+report `NOT_APPLICABLE` and the other three still run.
+
+Two of these deserve a note here rather than only in the
+[reference](reference/checks.md).
+
+**A random split is the wrong test for a pricing model.** It asks "can the
+model predict a policy it has not seen?" when the question is "can it predict
+*next quarter*?" — and seasonality, inflation and portfolio mix all leak
+backwards through a random split. For the high-risk use cases the gate
+requires an out-of-time holdout and records the claim in the model card.
+
+**Drift is the exception that does not block.** An out-of-time holdout
+*should* differ a little from training; that is the point of one. A gate that
+hard-fails on every seasonal shift gets switched off, so drift routes to a
+reviewer instead.
 
 ## The verdict
 
@@ -63,7 +116,8 @@ says it was skipped.
 2. Otherwise any flag at all → <span class="verdict-review">NEEDS_REVIEW</span>
 3. Otherwise → <span class="verdict-pass">PASS</span>
 
-Performance, compliance and security are blocking. **Fairness is not.**
+Validation, performance, compliance and security are blocking. **Fairness is
+not.**
 
 That is a design stance, not an oversight. A proxy-correlation finding might
 be a genuine problem or a legitimate rating factor, and only someone who knows

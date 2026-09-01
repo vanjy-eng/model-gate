@@ -323,3 +323,113 @@ def test_stable_sample_respects_the_seed_and_the_size(frame):
 
     # And it stays reproducible for a fixed seed.
     pd.testing.assert_frame_equal(a, stable_sample(X, 50, random_state=1))
+
+
+# --- validation methodology (0.5.2) ------------------------------------------
+
+
+def test_leakage_power_is_invariant_to_a_monotone_rescaling(frame):
+    """A leak measured in naira is the same leak measured in thousands.
+
+    Rank AUC depends only on ordering, so any strictly increasing transform of
+    a feature must leave its power untouched. A power that moved with the
+    units would make `leakage_min_power` mean something different per column.
+    """
+    from bdp_model_gate.structured.validation_checks import LeakageCheck
+
+    X, y, _ = frame
+    leaky = X.assign(settled=y * 1000.0 + 7.0)
+    baseline = LeakageCheck().run(_context(leaky, y, None))
+
+    rescaled = leaky.assign(settled=leaky["settled"] / 1000.0 + 12.0)
+    after = LeakageCheck().run(_context(rescaled, y, None))
+
+    assert [r.metadata.get("feature_power") for r in baseline] == [
+        r.metadata.get("feature_power") for r in after
+    ]
+
+
+def test_leakage_verdict_does_not_depend_on_row_order(frame):
+    from bdp_model_gate.structured.validation_checks import LeakageCheck
+
+    X, y, protected = frame
+    leaky = X.assign(settled=y * 1000.0)
+    order = np.random.default_rng(4).permutation(len(X))
+
+    before = LeakageCheck().run(_context(leaky, y, protected))
+    after = LeakageCheck().run(
+        _context(
+            leaky.iloc[order].reset_index(drop=True),
+            y[order],
+            protected.iloc[order].reset_index(drop=True),
+        )
+    )
+    assert [(r.flag, r.metadata.get("feature")) for r in before] == [
+        (r.flag, r.metadata.get("feature")) for r in after
+    ]
+
+
+def test_split_overlap_is_measured_by_content_not_position(frame):
+    """Shuffling either frame must not change how many rows they share —
+    the same property `stable_sample` exists to guarantee elsewhere."""
+    from bdp_model_gate.structured.validation_checks import SplitOverlapCheck
+
+    X, y, protected = frame
+    train, live = X.iloc[:200], X.iloc[100:300].reset_index(drop=True)  # 100 shared
+    rng = np.random.default_rng(8)
+
+    def overlap(train_frame, live_frame, labels, groups):
+        results = SplitOverlapCheck().run(_context(live_frame, labels, groups, X_train=train_frame))
+        return next(
+            r.metadata["n_overlapping"]
+            for r in results
+            if r.metadata["check"] == "overlap_with_training"
+        )
+
+    straight = overlap(train, live, y[100:300], protected.iloc[100:300].reset_index(drop=True))
+    order = rng.permutation(len(live))
+    shuffled = overlap(
+        train.sample(frac=1.0, random_state=2),
+        live.iloc[order].reset_index(drop=True),
+        y[100:300][order],
+        protected.iloc[100:300].reset_index(drop=True).iloc[order].reset_index(drop=True),
+    )
+    assert straight == shuffled == 100
+
+
+def test_drift_is_symmetric_in_magnitude(frame):
+    """Swapping the two frames must not change *whether* a feature drifted.
+
+    The numeric measure is standardised by the training spread, so the two
+    directions can differ slightly in size — but a shift that clears the
+    threshold one way must not vanish the other, or the verdict would depend
+    on which frame you happened to call training.
+    """
+    from bdp_model_gate.structured.validation_checks import FeatureDriftCheck
+
+    X, y, protected = frame
+    shifted = X.assign(income=X["income"] + 3 * X["income"].std())
+
+    forward = FeatureDriftCheck().run(_context(shifted, y, protected, X_train=X))
+    backward = FeatureDriftCheck().run(_context(X, y, protected, X_train=shifted))
+
+    assert (
+        {r.metadata.get("feature") for r in forward if r.flag == "DRIFT_RISK"}
+        == {r.metadata.get("feature") for r in backward if r.flag == "DRIFT_RISK"}
+        == {"income"}
+    )
+
+
+def test_renaming_a_feature_does_not_change_whether_it_leaks(frame):
+    """The check reads distributions, not names. A column called `target_copy`
+    and one called `x7` must be judged identically."""
+    from bdp_model_gate.structured.validation_checks import LeakageCheck
+
+    X, y, _ = frame
+    leaky = X.assign(obviously_the_answer=y * 1.0)
+    renamed = leaky.rename(columns={"obviously_the_answer": "x7"})
+
+    before = LeakageCheck().run(_context(leaky, y, None))
+    after = LeakageCheck().run(_context(renamed, y, None))
+    assert [r.flag for r in before] == [r.flag for r in after]
+    assert before[0].metadata["feature_power"] == after[0].metadata["feature_power"]

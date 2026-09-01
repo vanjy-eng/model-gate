@@ -6,6 +6,91 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-01
+
+Validation methodology — is the evidence behind the report sound?
+
+Nothing in this library stopped you passing the **training set** as the
+validation set. The gate reported an AUC of 0.99, a clean calibration curve
+and `PASS`, and every fairness figure beside it was measured on data the model
+had memorised. For a governance tool that is a serious hole, and the checks
+are cheap.
+
+### A fifth category, and it goes first
+`validation` is a new category rather than five more performance checks,
+because the two say different things:
+
+> A **performance** finding says *the model is not good enough*.
+> A **validation** finding says *you do not yet know whether it is*.
+
+The second is a prior question. If it fires, nothing underneath it means what
+it appears to mean — so these block, and `validation` is reported before
+everything else in both `summary()` and the HTML report.
+
+### Added
+- **`LeakageCheck`** — does a single column do what the whole model does? The
+  signature of a field populated *after* the outcome was known and joined back
+  in: a settlement amount on a claims-frequency model, a `closed_reason` on a
+  churn model. Each feature's solo power is measured on the same 0–1 scale as
+  the model's own — |2·AUC − 1| for classification, |r| for regression, the
+  correlation ratio for a categorical column — and **two** conditions must
+  hold before anything is flagged. Parity alone is not evidence: against a
+  model scoring 0.55, a feature scoring 0.54 reaches 98% of it and means
+  nothing, so `leakage_min_power` sets an absolute floor beside the ratio.
+- **`SplitOverlapCheck`** — rows shared between `X_train` and `X`, and exact
+  duplicates *within* `X`. Different causes, different fixes, so two findings:
+  the first is a broken split, the second survives a correct one and inflates
+  every metric by weighting an observation twice. Matched by row **content**,
+  so a reset index cannot hide an overlap and a shuffle cannot invent one.
+- **`ValidationStrategyCheck`** — a random split asks "can the model predict a
+  policy it has not seen?" when the question is "can it predict *next
+  quarter*?". Seasonality, inflation and portfolio mix all leak backwards
+  through a random split. `model_card["validation_strategy"]` is now required,
+  and must be out-of-time for the high-risk use cases. An unrecognised value
+  is flagged rather than accepted — `holdout` and `out_of_time` are different
+  claims and only one of them is checkable.
+- **`FeatureContractCheck`** — the right columns, in the right order. Silent
+  reordering is a classic production failure: scikit-learn checks names when
+  given a DataFrame, but a `predict_fn` doing `df.values` does not. The
+  expected list comes from `expected_features`, `model.feature_names_in_`, a
+  booster's own names, or `X_train.columns`, in that order.
+- **`FeatureDriftCheck`** — train-serve skew, promoted out of the docs into
+  the real suite. **Non-blocking**, unlike its four neighbours: an
+  out-of-time holdout *should* differ a little, and a gate that hard-fails on
+  every seasonal shift gets switched off.
+- **`context.X_train`** and **`context.expected_features`**, plus
+  `--train-data` on the CLI. `X_train` needs no row alignment — only its
+  columns and distributions are read, never its labels.
+- **`ValidationConfig`**, and **`bdp_model_gate.stats`**: `rank_auc`,
+  `average_ranks`, `correlation_ratio` (moved out of `structured/fairness.py`)
+  and `pearson_r`.
+
+### All five work on a core install
+A validation set that is secretly the training set is the last thing that
+should go unchecked because scikit-learn is missing, so the AUC these need is
+computed in numpy via the Mann–Whitney statistic with proper tie correction.
+
+It is **not** exposed as `metrics.roc_auc`, which is still documented as
+needing scikit-learn: quietly making a published metric numpy-native as a side
+effect of an unrelated release would be a contract change nobody asked for.
+`tests/test_validation_checks.py` asserts the implementation agrees with
+`sklearn.metrics.roc_auc_score` on tied data, which is where a naive rank
+implementation diverges.
+
+### Tests
+39 new known-answer tests, plus five metamorphic properties: a leak measured
+in naira is the same leak measured in thousands (rank AUC depends only on
+ordering), renaming a column cannot change whether it leaks, overlap is
+counted by content and not position, and swapping the two frames cannot change
+*whether* a feature drifted.
+
+### Changed
+- The default suite is 21 checks across five categories, up from 16 across
+  four.
+- `GateReport.summary()` and the HTML report both lead with `validation`.
+- `web/docs/extending.md` no longer uses `FeatureDriftCheck` as its teaching
+  example, since that name now belongs to a real check.
+
 ## [0.5.1] - 2026-08-27
 
 Plots, and a report a reviewer can actually read.
@@ -718,7 +803,8 @@ in 0.4.0; example notebooks in 0.4.1.
 - `bdp-model-gate` CLI for CI/CD use.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
-[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/vanjy-eng/model-gate/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/vanjy-eng/model-gate/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/vanjy-eng/model-gate/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/vanjy-eng/model-gate/compare/v0.4.1...v0.4.2
