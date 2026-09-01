@@ -35,22 +35,31 @@ def test_changelog_documents_the_current_version():
     assert f"## [{_pyproject_version()}]" in changelog
 
 
-def test_landing_page_advertises_the_current_version():
-    """The most visible number on the site, and the easiest to forget.
+#: Files carrying a hand-written version stamp, and the template each uses.
+#: `web/README.md` is on this list because it was missed: the first version of
+#: this guard covered only the landing page, and `web/README.md` then sat at
+#: 0.5.1 through the whole of 0.5.2's development. A guard with a hole in it is
+#: worse than none, because it is trusted.
+VERSION_STAMPS = (
+    ("web/landing/index.html", '<span class="version">{version}</span>'),
+    ("web/landing/index.html", "<span>BDP Model Gate {version}</span>"),
+    ("web/README.md", "Documents **bdp-model-gate {version}**."),
+)
 
-    It sits in two places — the masthead chip and the footer colophon — and
-    both are plain text a build step never touches.
-    """
+
+def test_the_website_advertises_the_current_version():
+    """The most visible number on the site, and the easiest to forget."""
+    version = _pyproject_version()
+    for relative, template in VERSION_STAMPS:
+        expected = template.format(version=version)
+        text = (PYPROJECT.parent / relative).read_text()
+        assert expected in text, f"{relative} does not advertise {version} — expected {expected!r}"
+
+
+def test_no_stale_version_is_left_on_the_landing_page():
+    """A leftover elsewhere on the page misleads as much as a stale masthead."""
     landing = (PYPROJECT.parent / "web" / "landing" / "index.html").read_text()
     version = _pyproject_version()
-    assert f'<span class="version">{version}</span>' in landing, (
-        f"the landing page masthead does not advertise {version} — update web/landing/index.html"
-    )
-    assert f"<span>BDP Model Gate {version}</span>" in landing, (
-        f"the landing page colophon does not advertise {version} — update web/landing/index.html"
-    )
-
-    # Any *other* release-shaped number on the page is a leftover.
     stale = {v for v in re.findall(r"\b\d+\.\d+\.\d+\b", landing) if v != version}
     assert not stale, f"stale version(s) left on the landing page: {sorted(stale)}"
 

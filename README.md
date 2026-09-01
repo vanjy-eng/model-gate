@@ -659,7 +659,6 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.5.2** | Validation methodology — leakage detection, out-of-time holdouts, feature-list checks. |
 | **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
 | **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
 | **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |

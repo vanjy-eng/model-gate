@@ -23,41 +23,12 @@ Every entry below ships as a complete slice, not just code:
 A release is not done when the code works. It is done when someone who has
 never seen it can find it, read why it exists, and run it.
 
-Current release: **0.5.1**. Next: **0.5.2**.
+Current release: **0.5.2**. Next: **0.5.3**.
 
 > **This file tracks what should happen.** What already happened lives in
 > [`CHANGELOG.md`](CHANGELOG.md), and shipped entries are removed from here
 > rather than marked done. The only release appearing in both is the one
 > currently being built.
-
----
-
-## 0.5.2 — Validation methodology and leakage
-
-**Branch:** `feat/validation-checks`
-
-Nothing currently stops a user passing **training data** as the validation
-set. The gate would report AUC 0.99 and `PASS`. For a governance tool that is
-a serious hole, and the checks are cheap.
-
-- **`LeakageCheck`** — flag a feature whose solo predictive power approaches
-  the full model's, the classic signature of a leaked target.
-- **Duplicate rows across splits**, when both frames are supplied.
-- **`validation_strategy` in the model card**, and a requirement that
-  high-risk use cases (`pricing`, `underwriting`, `credit_scoring`,
-  `claims_decisioning`) use an **out-of-time** holdout. A random split is the
-  wrong test for a pricing model, and no other tool will say so.
-- **Feature-list and order match** between `X` and what the model was trained
-  on. Silent column reordering is a classic production failure.
-- **Train-serve skew** — promote the `FeatureDriftCheck` currently living only
-  in the docs into the real suite.
-
-### Deliverables
-
-- Examples: extend `03_regression_sklearn` with an out-of-time split;
-  demonstrate the leak check catching a planted leaked feature.
-- Web: `docs/reference/checks.md`, and a validation section in
-  `docs/concepts.md`.
 
 ---
 
@@ -139,12 +110,20 @@ confusing red build months later on an unrelated PR.
 
 ### Also
 
-- **A mutation kill-rate floor.** Baseline is **42.7%** measured in CI at
-  0.5.1 (1472 killed of 3445 with a verdict, from 5959 generated), up from
-  35.5% at 0.4.2 — adding `test_plots.py` to the fast selection accounts for
-  most of the move. Once stable, `mutation_report.py --min-kill-rate` turns it
-  into a threshold. Set the floor a few points below the measured rate: the
-  run is time-boxed, so the tally varies with how far it gets.
+- **A mutation kill-rate floor.** Baseline is **42.0%** measured in CI at
+  0.5.2 (1758 killed of 4185 with a verdict, from 7004 generated), against
+  42.7% at 0.5.1 and 35.5% at 0.4.2.
+
+  Read the trend, not the number. 0.5.2 killed **286 more mutants** than 0.5.1
+  and still scored lower, because the run is time-boxed to 25 minutes and a
+  release that adds code adds mutants faster than the box gets through them.
+  Generated mutants went 3430 → 5959 → 7004 across those three releases while
+  the wall clock stayed fixed.
+
+  That has a consequence for this item: a floor set on the *rate* will fail on
+  an ordinary release that happens to add a lot of code. Either raise the time
+  box first, or floor the **absolute kill count** instead. Decide that before
+  turning `mutation_report.py --min-kill-rate` on.
 - **Executed documentation code blocks.** The prose snippets under `web/docs/`
   are not run by anything, so an API change can leave them wrong while
   `mkdocs build --strict` still passes — the generated API reference and the

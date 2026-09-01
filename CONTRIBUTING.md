@@ -121,10 +121,15 @@ make a failure go away, the failure is the point.
 
 ### Mutation testing
 
-At 0.5.1 the suite reports **92% line coverage** and a **42.7% mutation kill
-rate** (1472 of 3445 mutants). That gap is the honest measure of how much of
-the suite executes code without asserting anything about it — and the reason
-coverage alone is not the bar.
+At 0.5.2 the suite reports **91% line coverage** and a **42.0% mutation kill
+rate** (1758 of 4185 mutants with a verdict). That gap is the honest measure
+of how much of the suite executes code without asserting anything about it —
+and the reason coverage alone is not the bar.
+
+Read the rate as a trend, not a target. The run is time-boxed to 25 minutes,
+so a release that adds code adds mutants faster than the box gets through
+them: 0.5.2 killed 286 more mutants than 0.5.1 and still scored 0.7 points
+lower.
 
 ```bash
 mutmut run 2>&1 | tee mutation.log
