@@ -1,8 +1,106 @@
 # The checks
 
-Sixteen built-in checks. Each declares a **category**, whether it is
-**blocking**, and which **tasks** it supports. Nine also draw a chart — see
-[Plots](plots.md).
+Twenty-one built-in checks across five categories. Each declares a
+**category**, whether it is **blocking**, and which **tasks** it supports.
+Nine also draw a chart — see [Plots](plots.md).
+
+## Validation — blocking
+
+**Reported first, and blocking, because these are a prior question.** A
+performance finding says *the model is not good enough*. A validation finding
+says *you do not yet know whether it is* — and if one fires, every number
+below it was measured on evidence that does not support it.
+
+The motivating hole: nothing used to stop you passing the **training set** as
+the validation set. The gate reported a superb score, a clean calibration
+curve and `PASS`, and every fairness figure beside it was measured on data the
+model had memorised.
+
+| Check | Needs | Flags |
+|---|---|---|
+| `target_leakage` | `y_true`, `y_pred` | `LEAKAGE_RISK` |
+| `split_overlap` | `X_train` for the overlap half | `SPLIT_OVERLAP_RISK`, `DUPLICATE_ROWS_RISK` |
+| `validation_strategy` | `model_card` | `VALIDATION_STRATEGY_RISK` |
+| `feature_contract` | `X_train` or `expected_features` | `FEATURE_CONTRACT_RISK`, `FEATURE_ORDER_RISK` |
+| `feature_drift` | `X_train` | `DRIFT_RISK` (non-blocking) |
+
+All five work on a **core install**. A validation set that is secretly the
+training set is the last thing that should go unchecked because scikit-learn
+is missing.
+
+### `target_leakage`
+
+Does a single column do what the whole model does? That is the signature of a
+field populated *after* the outcome was known and joined back in — a
+settlement amount on a claims-frequency model, a `closed_reason` on a churn
+model. The model learns it, scores beautifully offline, and collapses in
+production where the column is empty at scoring time.
+
+Each feature's solo predictive power is measured on the same 0–1 scale as the
+model's own: |2·AUC − 1| for classification, |r| for regression, and the
+correlation ratio for a low-cardinality categorical column. Two conditions
+must both hold before anything is flagged — the feature must reach
+`leakage_ratio` of the model's power **and** clear `leakage_min_power` in
+absolute terms. Parity alone is not evidence: against a model scoring 0.55, a
+feature scoring 0.54 reaches 98% of it and means nothing.
+
+Near-unique string columns are skipped rather than scored, since an
+identifier puts every row in its own group and drives the statistic to 1 by
+arithmetic.
+
+### `split_overlap`
+
+Two separate findings, with different causes and different fixes:
+
+- **Rows shared between `X_train` and `X`** — a broken split.
+- **Exact duplicates within `X`** — survives a correct split, and inflates
+  every metric by weighting one observation twice.
+
+Matching is by row **content**, not index, so a reset index cannot hide an
+overlap and a shuffle cannot invent one. `max_split_overlap` is not zero by
+default: identical feature vectors legitimately recur in data with few
+categorical levels, and the check says so when both findings fire together.
+
+### `validation_strategy`
+
+A random split asks "can the model predict a policy it has not seen?" An
+out-of-time split asks "can it predict **next quarter**?" — the only question
+that matters for a model about to be applied to future business, and the one a
+random split silently answers yes to when the real answer is no. Seasonality,
+inflation and portfolio mix all leak backwards through a random split.
+
+So `model_card["validation_strategy"]` is required, and for the high-risk use
+cases it must be out-of-time. An unrecognised value is flagged rather than
+accepted — `holdout` and `out_of_time` are different claims and only one of
+them answers the question.
+
+This is the one check here that cannot be verified from the data. It records a
+claim, which is what a model card is for: an untrue answer is a signed
+statement, not an oversight.
+
+### `feature_contract`
+
+Are these the columns the model was fitted on, in the order it expects? Silent
+column reordering is a classic production failure — a model handed a
+positional array scores confidently against the wrong features and nothing
+raises. scikit-learn checks names when given a DataFrame; a `predict_fn` doing
+`df.values` does not, and neither does a booster fed a numpy array.
+
+The expected list comes from the first of these that exists:
+`context.expected_features`, `model.feature_names_in_`, the booster's own
+feature names, then `X_train.columns`.
+
+### `feature_drift`
+
+Train-serve skew: a feature whose distribution has moved between the two
+frames. Numeric features are compared by standardised mean shift (unitless);
+categorical features by total variation distance between their frequency
+tables.
+
+**Non-blocking**, unlike its four neighbours. An out-of-time holdout *should*
+differ a little — that is the point of one — so drift warrants a look rather
+than a hard stop, and a gate that fails the build on every seasonal shift gets
+switched off.
 
 ## Fairness — non-blocking
 

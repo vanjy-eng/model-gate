@@ -91,6 +91,32 @@ premium or pure premium. Without it the check reports `NOT_APPLICABLE` rather
 than falling back to a raw-price comparison, which would answer a different
 question under the same name.
 
+## Split it out of time
+
+A pricing model will be applied to **next quarter's** business. A random split
+asks a different and easier question — can it price a policy it has not seen?
+— and inflation, seasonality and portfolio mix all leak backwards through one,
+so it flatters the model.
+
+The gate requires an out-of-time holdout for the high-risk use cases, pricing
+among them, and reads the claim from the model card:
+
+```python
+context = StructuredGateContext(
+    ...,
+    X_train=X_train,  # enables split-overlap and train-serve skew
+    model_card={"use_case": "pricing", "validation_strategy": "out_of_time"},
+)
+```
+
+Worth knowing here rather than only in the [reference](../reference/checks.md):
+`technical_premium` is a natural leaked target on a pricing model. If it is in
+`X` *and* it is what `expected_loss` is derived from, the model is being
+graded against its own input. `target_leakage` will say so.
+
+Notebook [03](../examples/03_regression_sklearn.ipynb) works all three of
+these through on one book.
+
 ## Robustness on a continuous output
 
 A "prediction flip" is meaningless when the output is continuous — every

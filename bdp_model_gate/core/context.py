@@ -69,6 +69,16 @@ class StructuredGateContext:
             `class_order` is given (and says so in the log); without either,
             the multiclass parity check reports NOT_APPLICABLE rather than
             picking one arbitrarily.
+        X_train: The feature frame the model was **trained** on, if you have
+            it. Unlocks the validation-methodology checks: rows shared
+            between the two frames, and train-serve skew. It does not need to
+            be row-aligned to anything — only its columns and distributions
+            are read, never its labels.
+        expected_features: The columns the model expects, in the order it
+            expects them. Usually unnecessary — the list is read from
+            `model.feature_names_in_`, a booster's own feature names, or
+            `X_train.columns`. Supply it for a remote endpoint, where the
+            schema is documented somewhere this library cannot reach.
         task: "auto" (default), "binary", "multiclass" or "regression".
             "auto" infers from y_true and logs what it inferred. Set it
             explicitly for anything you gate on: a claims-frequency target of
@@ -84,6 +94,8 @@ class StructuredGateContext:
     y_true: Sequence[Any] | None = None
     y_pred: Sequence[Any] | None = None
     protected_df: pd.DataFrame | None = None
+    X_train: pd.DataFrame | None = None
+    expected_features: Sequence[str] | None = None
     latencies_ms: Sequence[float] | None = None
     cost_per_inference: float | None = None
     model_card: dict | None = None

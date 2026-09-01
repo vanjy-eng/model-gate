@@ -158,7 +158,7 @@ from bdp_model_gate.task import CLASSIFICATION_TASKS
 
 class MyCheck(BaseCheck):
     name = "my_check"  # snake_case; appears in the report
-    category = "fairness"  # fairness | performance | compliance | security
+    category = "fairness"  # validation | fairness | performance | compliance | security
     blocking = True  # False routes to NEEDS_REVIEW instead
     supported_tasks = CLASSIFICATION_TASKS  # the gate reports NOT_APPLICABLE elsewhere
 

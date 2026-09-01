@@ -7,7 +7,7 @@ data or credentials.
 |---|---|---|---|
 | [01 Binary classification](01_binary_classification_sklearn.ipynb) | binary | credit scoring | `GradientBoostingClassifier` |
 | [02 Multiclass and ordinal](02_multiclass_ordinal_sklearn.ipynb) | multiclass, ordinal | underwriting | `RandomForestClassifier` |
-| [03 Regression](03_regression_sklearn.ipynb) | regression | premium, severity, frequency | `GradientBoostingRegressor` |
+| [03 Regression](03_regression_sklearn.ipynb) | regression, validation | premium, severity, frequency | `GradientBoostingRegressor` |
 | [04 PyTorch and friends](04_any_framework_classification.ipynb) | binary | fraud | PyTorch, Keras-shaped, remote |
 | [05 Boosters and the CLI](05_boosters_and_cli.ipynb) | binary | fraud | XGBoost, `--model-loader` |
 | [06 Reports and plots](06_reports_and_plots.ipynb) | all three | credit, pricing, underwriting | `LogisticRegression`, plain functions |

@@ -484,7 +484,7 @@
     <a class="wordmark" href="#top">
       <span class="mark" aria-hidden="true"></span>
       BDP Model Gate
-      <span class="version">0.5.1</span>
+      <span class="version">0.5.2</span>
     </a>
     <nav>
       <a href="#start">Getting started</a>
@@ -502,7 +502,7 @@
     <span class="eyebrow">Pre-deployment ML governance</span>
     <h1>Every model gets a verdict before it ships.</h1>
     <p class="lede">
-      Fairness, performance, compliance and security checks that run
+      Validation, fairness, performance, compliance and security checks that run
       <strong>after training and before promotion</strong> — reduced to one
       status your pipeline can branch on. Built for decisions that answer to
       someone: credit scoring, underwriting, pricing and claims.
@@ -541,7 +541,7 @@
           <span class="exit">exit 1</span>
         </div>
         <h3>Hard fail</h3>
-        <p>A performance, compliance or security check failed. The build stops and the report says which.</p>
+        <p>A validation, performance, compliance or security check failed. The build stops and the report says which.</p>
       </div>
     </div>
   </section>
@@ -597,7 +597,7 @@
   </section>
 
   <section class="wrap divider" id="checks">
-    <span class="eyebrow">Sixteen checks, four categories</span>
+    <span class="eyebrow">Twenty-one checks, five categories</span>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">What gets checked</h2>
     <p class="prose" style="margin-top:.9rem;">
       Optional inputs degrade rather than fail — omit protected attributes and
@@ -606,6 +606,20 @@
     </p>
 
     <div class="checks">
+      <article class="check">
+        <div class="check-top">
+          <h3>Validation</h3>
+          <span class="tag blocking">Blocking</span>
+        </div>
+        <ul>
+          <li><code>target_leakage</code> — does one column do what the whole model does?</li>
+          <li><code>split_overlap</code> — has the model already seen these rows?</li>
+          <li><code>validation_strategy</code> — out-of-time holdout, or a random split?</li>
+          <li><code>feature_contract</code> — the right columns, in the right order</li>
+          <li><code>feature_drift</code> — does validation still look like training?</li>
+        </ul>
+      </article>
+
       <article class="check">
         <div class="check-top">
           <h3>Fairness</h3>
@@ -692,7 +706,8 @@
       Nothing here imports a deep-learning framework. Pass an estimator with
       <code>.predict()</code>, or a plain <code>fn(DataFrame) -&gt; array</code> —
       the boundary is deliberately narrow, so tensor conversion, batching and
-      auth stay in your code.
+      auth stay in your code. The validation checks apply to all three tasks;
+      the fairness suite changes shape with the target.
     </p>
 
     <div class="table-scroll">
@@ -828,7 +843,7 @@ report.to_json(<span class="c-str">"gate_report.json"</span>)
       </div>
     </div>
     <div class="colophon">
-      <span>BDP Model Gate 0.5.1</span>
+      <span>BDP Model Gate 0.5.2</span>
       <span>Maintained by Vangelis Oden</span>
       <span>MIT</span>
     </div>

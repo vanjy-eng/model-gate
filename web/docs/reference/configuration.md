@@ -16,6 +16,37 @@ config.fairness.disparity_threshold = 0.05
 report = ModelGate(checks=default_structured_checks(config)).run(context)
 ```
 
+## Validation
+
+| Field | Default | Notes |
+|---|---|---|
+| `leakage_ratio` | `0.95` | a feature is suspect at this fraction of the model's own predictive power |
+| `leakage_min_power` | `0.80` | ...and only if it clears this absolutely. Both must hold |
+| `max_split_overlap` | `0.01` | validation rows also present in `X_train` |
+| `max_duplicate_fraction` | `0.05` | exact duplicate rows *within* the validation set |
+| `drift_threshold` | `0.25` | standardised mean shift, numeric features |
+| `categorical_drift_threshold` | `0.15` | total variation distance, categorical features |
+| `out_of_time_strategies` | `out_of_time`, `temporal`, `forward_chaining`, `walk_forward` | values that count as separated in time |
+| `accepted_validation_strategies` | the four above plus `random_split`, `stratified_split`, `cross_validation`, `grouped_split` | anything else is flagged, not accepted |
+| `require_out_of_time_for_high_risk` | `True` | applies to `ComplianceConfig.high_risk_use_cases` |
+
+`leakage_min_power` is the field that keeps the leak check usable, and the one
+to reach for if it is noisy. Parity between a feature and the model only means
+something when the model is good: against a model scoring 0.55, a feature
+scoring 0.54 reaches 98% of it and means nothing at all. Both conditions are
+required precisely so a weak model does not make every column look like a
+leak.
+
+`max_split_overlap` is deliberately not zero. Identical feature vectors recur
+legitimately in data with few categorical levels, and the check says so when
+duplicates and overlap fire together.
+
+```python
+config.validation.leakage_min_power = 0.90  # quieter on a strong model
+config.validation.max_split_overlap = 0.0  # zero tolerance
+config.validation.require_out_of_time_for_high_risk = False
+```
+
 ## Performance
 
 | Field | Default | Notes |

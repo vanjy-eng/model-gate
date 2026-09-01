@@ -182,6 +182,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--protected", help="Path to a CSV of protected attributes, row-aligned to --data"
     )
+    parser.add_argument(
+        "--train-data",
+        help=(
+            "Path to a CSV of the TRAINING features. Unlocks the validation checks "
+            "that need both frames: rows shared between the two splits, and "
+            "train-serve skew. Only its columns and distributions are read — the "
+            "target column is dropped if present, and no labels are used"
+        ),
+    )
     parser.add_argument("--model-card", help="Path to a JSON model card")
     parser.add_argument(
         "--latencies", help="Path to a text/CSV file of per-request latencies in ms, one per line"
@@ -342,6 +351,14 @@ def main(argv=None) -> int:
         y_pred = _predict(model, X, args.task)
 
         protected_df = pd.read_csv(args.protected) if args.protected else None
+
+        X_train = None
+        if args.train_data:
+            X_train = pd.read_csv(args.train_data)
+            # Drop whatever the validation frame dropped, so the two are
+            # compared on features alone. Overlap detection would otherwise
+            # miss a shared row whose label column happened to differ.
+            X_train = X_train.drop(columns=[c for c in drop_cols if c in X_train.columns])
         model_card = json.load(open(args.model_card)) if args.model_card else None
 
         latencies_ms = None
@@ -361,6 +378,7 @@ def main(argv=None) -> int:
             y_true=y_true,
             y_pred=y_pred,
             protected_df=protected_df,
+            X_train=X_train,
             latencies_ms=latencies_ms,
             cost_per_inference=args.cost_per_inference,
             model_card=model_card,

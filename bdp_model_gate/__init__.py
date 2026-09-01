@@ -1,6 +1,6 @@
 """bdp_model_gate — automated pre-deployment ML model governance.
 
-Runs fairness, performance, compliance, and security checks against a
+Runs validation, fairness, performance, compliance and security checks against a
 trained model before it's promoted to production, and produces a single
 GateReport with a PASS / NEEDS_REVIEW / BLOCKED status you can wire into CI.
 
@@ -35,7 +35,7 @@ from .config import (
 from .core import BaseCheck, CheckResult, GateReport, ModelGate, StructuredGateContext
 from .task import ALL_TASKS, BINARY, MULTICLASS, REGRESSION
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 
 def run_structured_gate(model, X, y_true, y_pred, protected_df=None, **kwargs) -> GateReport:
