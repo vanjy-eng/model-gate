@@ -91,9 +91,15 @@ report.model_metric  # which metric produced the score
 report.model_score
 report.flags  # non-OK, non-NOT_APPLICABLE results
 report.by_category("fairness")
-report.to_json("gate_report.json")
+report.to_json("gate_report.json")  # the archival record
+report.to_html("gate_report.html")  # the page a reviewer reads
 ```
 
 `model_metric` sits next to `model_score` deliberately. A score is
 uninterpretable without knowing what produced it, so the report always names
 it — including when a metric fell back to a substitute.
+
+The two renderings are for two readers. `to_json` is the record a system
+files; `to_html` is one self-contained page — verdict, every finding, and a
+chart beside each number whose shape is what has to be judged. See
+[Reports](reference/reports.md).

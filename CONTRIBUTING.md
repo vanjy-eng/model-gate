@@ -342,8 +342,32 @@ Notebooks are **copied** from `examples/` at build time rather than duplicated
 in the repo, so there is one source of truth; the copies under
 `web/docs/examples/` are gitignored.
 
-When a change alters a **capability claim** — what the library can do, not how
-— the landing page needs updating too, not just the reference.
+### The site ships with the release
+
+The website is part of a release, not a follow-up. It is the first thing an
+evaluating bank or insurer sees, and a page advertising a version from two
+releases ago undermines a governance tool more than a missing feature would.
+
+Before a release is tagged:
+
+| Update | Where |
+|---|---|
+| Version chip and colophon | `web/landing/index.html` |
+| New or changed checks | `web/docs/reference/checks.md`, the checks grid in `web/landing/index.html`, and the table in `web/docs/index.md` |
+| New config fields | `web/docs/reference/configuration.md` |
+| A new **capability** | the landing page — "produces a report a reviewer can sign" is a claim, not a detail |
+| Counts written in prose | notebooks, checks, plots — these go stale in silence |
+| Notebook outputs | `examples/run_all.sh`, then `./web/build.sh` to re-copy them |
+
+Two of those are enforced, because relying on memory is what let the landing
+page advertise 0.4.1 through two releases while its "sixteen checks" grid
+listed thirteen. `tests/test_package.py` now fails if the landing page's
+version drifts from `pyproject.toml`, if any release-shaped version string is
+left on the page, or if a check in the default suite is missing from
+`reference/checks.md`.
+
+The rest is judgement, and `--strict` cannot help: it catches a broken link,
+never a sentence that is no longer true. Read the pages you changed.
 
 ## CHANGELOG and ROADMAP
 

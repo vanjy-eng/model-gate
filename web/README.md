@@ -12,8 +12,9 @@ web/
   build.sh             builds both into web/_site
 ```
 
-Status: **0.4.1-alpha** — the site is new and its structure may move. The
-library it documents is 0.5.1.
+Documents **bdp-model-gate 0.5.1**. The site carries no version of its own:
+a second version number is a second thing to forget at release time, and it
+was already the stale one.
 
 ## Build
 
@@ -46,8 +47,14 @@ open directly.
 - **`mkdocs build --strict`** fails on a broken internal link or a page
   missing from the nav, so a rename cannot quietly orphan a page.
 
-Prose code blocks are **not** currently executed. That gap is tracked in
-[`ROADMAP.md`](../ROADMAP.md) against the 0.4.2 robustness work.
+- **The version stamp is asserted.** `tests/test_package.py` fails if the
+  landing page's version chip drifts from `pyproject.toml`, and if a check in
+  the default suite is missing from `docs/reference/checks.md`. Both had
+  already drifted once before the test existed.
+
+Prose code blocks are **not** currently executed, so an API change can leave a
+snippet wrong while `--strict` still passes. That is the remaining gap, and it
+is tracked in [`ROADMAP.md`](../ROADMAP.md) under 0.6.0.
 
 ## Deploy
 
@@ -68,3 +75,21 @@ settings; the first run creates the site.
 
 The two builds share a palette — deep teal `#0e5c55` on cool green-grey paper,
 IBM Plex Sans and Mono. Keep them in step when changing either.
+`bdp_model_gate/plots/style.py` carries the same palette, so a chart pasted
+into either page does not look like a foreign object.
+
+## At every release
+
+The site is part of the release, not a follow-up. Before tagging:
+
+| Update | Where |
+|---|---|
+| Version chip and colophon | `landing/index.html` — asserted by `tests/test_package.py` |
+| New or changed checks | `docs/reference/checks.md`, the checks grid in `landing/index.html`, and the table in `docs/index.md` |
+| New config fields | `docs/reference/configuration.md` |
+| A new capability | the landing page — "produces a report a reviewer can sign" is a claim, not a detail |
+| Counts in prose | notebooks, checks, plots — the numbers that go stale silently |
+| Notebook outputs | `examples/run_all.sh`, then `./web/build.sh` to re-copy |
+
+Then run `./web/build.sh` and read the pages you changed. `--strict` catches a
+broken link; it cannot catch a sentence that is no longer true.

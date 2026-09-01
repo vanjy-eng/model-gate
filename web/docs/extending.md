@@ -72,6 +72,19 @@ every task, so a check written before 0.3.0 keeps working — but if yours only
 makes sense for one, say so and the gate will report `NOT_APPLICABLE`
 elsewhere rather than letting it produce a meaningless number.
 
+### An optional third attribute: `plot`
+
+Override `plot(self, context, results=None, ax=None)` and the report renders a
+chart beneath your check's findings. Discovery is by override alone, so there
+is nothing to register.
+
+Draw only where your check collapses a distribution to a scalar **and the
+shape is what a reader needs to judge** — a scalar that is genuinely a scalar
+should be left alone. Take an optional `Axes` and return it, return `None`
+when there is nothing to draw, and never raise. Full guidance, including why a
+chart must never contradict the number beside it, is in
+[Plots](reference/plots.md).
+
 ### A broken check is contained
 
 `ModelGate` catches exceptions per check and converts them to a blocking
@@ -107,10 +120,16 @@ from bdp_model_gate.registry import discover_plugin_checks
 print(discover_plugin_checks())
 ```
 
-## Contributing
+## Contributing to the library itself
+
+Everything above is about extending the gate from *your* code. To change the
+library, see
+[`CONTRIBUTING.md`](https://github.com/vanjy-eng/model-gate/blob/main/CONTRIBUTING.md)
+— development setup, the testing standards, and how a check or a plot gets
+reviewed.
 
 ```bash
-pip install -e ".[dev,structured]"
+pip install -e ".[dev,structured,plots,yaml,toml]"
 
 ruff check .        # lint
 ruff format .       # format

@@ -40,7 +40,8 @@ context = StructuredGateContext(
 
 report = ModelGate().run(context)
 print(report.summary())
-report.to_json("gate_report.json")
+report.to_json("gate_report.json")  # for the system that files it
+report.to_html("gate_report.html")  # for the person who signs it off
 ```
 
 ```text
@@ -94,4 +95,5 @@ Exit codes are `0`, `2` and `1` for the three statuses, so a pipeline can tell
 
 - [Concepts](concepts.md) — how the pieces fit
 - Your task: [binary](tasks/binary.md) · [multiclass](tasks/multiclass.md) · [regression](tasks/regression.md)
-- [Examples](examples/index.md) — five runnable notebooks
+- [Reports and plots](reference/reports.md) — what a reviewer actually reads
+- [Examples](examples/index.md) — six runnable notebooks
