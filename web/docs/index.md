@@ -13,8 +13,11 @@ pip install "bdp-model-gate[structured]"
 ```
 
 It runs **after a model is trained and before it is promoted** — not on every
-pull request. The output is a JSON report a reviewer can read months later:
-it records which metric ran, which checks were skipped, and why.
+pull request. The output is a report a reviewer can read months later: it
+records which metric ran, which checks were skipped, and why. Take it as JSON
+for the system that files it, or as a
+[self-contained HTML page](reference/reports.md) for the person who has to
+sign it off.
 
 ## Where to go
 
@@ -27,7 +30,9 @@ it records which metric ran, which checks were skipped, and why.
 - **[Tasks](tasks/binary.md)** — binary, multiclass and ordinal, regression
 - **[Any model](models.md)** — scikit-learn, PyTorch, XGBoost, remote endpoints
 - **[Reference](reference/checks.md)** — the checks, configuration, CLI, API
-- **[Examples](examples/index.md)** — five runnable notebooks
+- **[Reports and plots](reference/reports.md)** — the page a reviewer signs,
+  and the nine charts in it
+- **[Examples](examples/index.md)** — six runnable notebooks
 
 </div>
 
@@ -35,15 +40,20 @@ it records which metric ran, which checks were skipped, and why.
 
 | Category | Blocking | Checks |
 |---|---|---|
-| Fairness | No → review | proxy correlation, demographic parity, SHAP subgroup gaps, counterfactual flip |
+| Fairness | No → review | proxy correlation, demographic parity, SHAP subgroup gaps, counterfactual flip, equalised odds, subgroup calibration |
 | Fairness (regression) | No → review | loss-ratio parity, group mean gap, error parity, calibration parity |
-| Performance | Yes | model score, p95 latency, cost per inference |
+| Performance | Yes | model score, calibration, p95 latency, cost per inference |
 | Compliance | Yes | model-card completeness, DPIA trigger, explainability requirement |
 | Security | Yes | adversarial robustness, PII leakage, prompt injection |
 
 Fairness is deliberately non-blocking. Those findings frequently need human
 judgement, so they route to a reviewer rather than failing a build — which is
 the distinction most CI gates collapse.
+
+The fairness checks cover all three families — independence, separation and
+sufficiency — which cannot all hold at once whenever base rates differ between
+groups. Reporting one without the others makes that choice silently; see
+[Fairness: three families](tasks/fairness.md).
 
 ## Regulatory defaults
 

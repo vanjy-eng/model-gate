@@ -12,8 +12,11 @@ Every entry below ships as a complete slice, not just code:
    answers, invariants, and a place in the model-family matrix.
 3. **Examples**: a new notebook, or updates to the existing ones, executed via
    `examples/run_all.sh` so the committed outputs are true.
-4. **Web**: the affected pages under `web/docs/`, and the landing page where a
-   capability claim changes.
+4. **Web**: the affected pages under `web/docs/`, and the landing page — its
+   version stamp every time, its checks grid and capability claims whenever
+   those change. The site is part of the release, not a follow-up; see the
+   checklist in [`CONTRIBUTING.md`](CONTRIBUTING.md#the-site-ships-with-the-release).
+   `tests/test_package.py` enforces the version stamp and check coverage.
 5. **A pull request to `main`** — the `main-lock` ruleset requires one, and CI
    plus the docs build must be green before merge.
 
@@ -136,11 +139,17 @@ confusing red build months later on an unrelated PR.
 
 ### Also
 
-- **A mutation kill-rate floor.** Baseline is **35.5%** measured in CI (1115
-  killed of 3139 with a verdict, from 3430 generated), reproducing a local
-  35.6%. Once stable, `mutation_report.py --min-kill-rate` turns it into a
-  threshold. Survivors cluster in `structured/fairness` (506),
-  `structured/security` (318) and `metrics` (272).
+- **A mutation kill-rate floor.** Baseline is **42.7%** measured in CI at
+  0.5.1 (1472 killed of 3445 with a verdict, from 5959 generated), up from
+  35.5% at 0.4.2 — adding `test_plots.py` to the fast selection accounts for
+  most of the move. Once stable, `mutation_report.py --min-kill-rate` turns it
+  into a threshold. Set the floor a few points below the measured rate: the
+  run is time-boxed, so the tally varies with how far it gets.
+- **Executed documentation code blocks.** The prose snippets under `web/docs/`
+  are not run by anything, so an API change can leave them wrong while
+  `mkdocs build --strict` still passes — the generated API reference and the
+  notebooks are both guarded, and this is the remaining gap. Belongs with the
+  tooling work rather than the intervals.
 
 ### Deliverables
 

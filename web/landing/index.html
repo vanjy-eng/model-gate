@@ -484,7 +484,7 @@
     <a class="wordmark" href="#top">
       <span class="mark" aria-hidden="true"></span>
       BDP Model Gate
-      <span class="version">0.4.1</span>
+      <span class="version">0.5.1</span>
     </a>
     <nav>
       <a href="#start">Getting started</a>
@@ -616,6 +616,8 @@
           <li><code>disparate_impact</code> — demographic parity</li>
           <li><code>shap_subgroup_gap</code> — per-group contribution gaps</li>
           <li><code>counterfactual_flip</code> — prediction shift on attribute flip</li>
+          <li><code>equalised_odds</code> — equal opportunity, and the wider TPR/FPR gap</li>
+          <li><code>subgroup_calibration</code> — does a score mean the same for every group?</li>
         </ul>
       </article>
 
@@ -639,6 +641,7 @@
         </div>
         <ul>
           <li>Score on a metric you choose — twelve built in, or your own callable</li>
+          <li><code>calibration</code> — do the stated probabilities match reality?</li>
           <li>p95 latency against a benchmark run</li>
           <li>Cost per inference</li>
         </ul>
@@ -701,12 +704,12 @@
           <tr>
             <td><strong>Binary</strong><br><span class="cell-note">credit, fraud, lapse</span></td>
             <td><code>roc_auc</code>, <code>average_precision</code>, <code>f1</code>, …</td>
-            <td class="cell-note">Demographic parity, proxy, SHAP, counterfactual</td>
+            <td class="cell-note">All three families: parity, equalised odds, subgroup calibration — plus proxy, SHAP, counterfactual</td>
           </tr>
           <tr>
             <td><strong>Multiclass &amp; ordinal</strong><br><span class="cell-note">underwriting decisions</span></td>
             <td><code>quadratic_kappa</code>, <code>ordinal_mae</code>, macro-averaged</td>
-            <td class="cell-note">Parity against a favourable outcome you define</td>
+            <td class="cell-note">All three families, against a favourable outcome you define</td>
           </tr>
           <tr>
             <td><strong>Regression</strong><br><span class="cell-note">pricing, severity, frequency</span></td>
@@ -825,9 +828,8 @@ report.to_json(<span class="c-str">"gate_report.json"</span>)
       </div>
     </div>
     <div class="colophon">
-      <span>BDP Model Gate 0.4.1</span>
+      <span>BDP Model Gate 0.5.1</span>
       <span>Maintained by Vangelis Oden</span>
-      <span>Site 0.4.1-alpha</span>
       <span>MIT</span>
     </div>
   </div>

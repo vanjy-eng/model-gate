@@ -1,5 +1,13 @@
-"""Package-level invariants: the version is declared in two places and a
-release tag is cut against both, so they must not drift apart."""
+"""Package-level invariants: the things that go stale silently.
+
+The version is declared in four places — `pyproject.toml`, `__init__.py`, the
+changelog heading and the website — and a release tag is cut against them, so
+they must not drift apart. The website ones are here because they already had:
+the landing page advertised 0.4.1 for two releases, and its "sixteen checks"
+grid listed thirteen.
+
+A release convention that depends on someone remembering is not a convention.
+"""
 
 import re
 from pathlib import Path
@@ -25,6 +33,48 @@ def test_dunder_version_matches_pyproject():
 def test_changelog_documents_the_current_version():
     changelog = (PYPROJECT.parent / "CHANGELOG.md").read_text()
     assert f"## [{_pyproject_version()}]" in changelog
+
+
+def test_landing_page_advertises_the_current_version():
+    """The most visible number on the site, and the easiest to forget.
+
+    It sits in two places — the masthead chip and the footer colophon — and
+    both are plain text a build step never touches.
+    """
+    landing = (PYPROJECT.parent / "web" / "landing" / "index.html").read_text()
+    version = _pyproject_version()
+    assert f'<span class="version">{version}</span>' in landing, (
+        f"the landing page masthead does not advertise {version} — update web/landing/index.html"
+    )
+    assert f"<span>BDP Model Gate {version}</span>" in landing, (
+        f"the landing page colophon does not advertise {version} — update web/landing/index.html"
+    )
+
+    # Any *other* release-shaped number on the page is a leftover.
+    stale = {v for v in re.findall(r"\b\d+\.\d+\.\d+\b", landing) if v != version}
+    assert not stale, f"stale version(s) left on the landing page: {sorted(stale)}"
+
+
+def test_every_default_check_is_documented():
+    """A check nobody can find is a check nobody runs.
+
+    The reference page is the contract: if a check ships in the default suite,
+    its name appears there. This is deliberately name-level rather than
+    prose-level — it cannot judge whether the description is any good, only
+    that the check was not added and then forgotten.
+    """
+    from bdp_model_gate.structured import default_structured_checks
+
+    page = (PYPROJECT.parent / "web" / "docs" / "reference" / "checks.md").read_text()
+    missing = [
+        check.name
+        for check in default_structured_checks(include_plugins=False)
+        if check.name not in page
+    ]
+    assert not missing, (
+        f"undocumented check(s): {missing} — add them to "
+        "web/docs/reference/checks.md and the grid in web/landing/index.html"
+    )
 
 
 def test_no_runtime_pep604_without_future_import():
