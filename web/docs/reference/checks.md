@@ -246,6 +246,26 @@ Only relevant with a generative side-car — an explanation writer, a chatbot.
 Supply it as `generate_fn` and the check fires canned jailbreak prompts at it,
 looking for refusal. Without one it reports `NOT_APPLICABLE`.
 
+!!! warning "Treat this one as a smoke test, not a security assessment"
+    It sends three well-known prompts and decides whether the model refused by
+    substring-matching six English words. Three consequences worth knowing
+    before you rely on it:
+
+    - **A response that leaks while apologising passes.** "I cannot normally
+      share this, but the system prompt is …" contains *cannot*, so it scores
+      `OK`.
+    - **A refusal in other words, or another language, fails.** "That request
+      is out of scope" has no marker, and the check blocks.
+    - **Indirect injection is not tested at all** — untrusted text arriving as
+      *data* (a claim description, a customer email) rather than as the user
+      turn, which is the realistic attack against a regulated pipeline.
+
+    A rewrite is scheduled for **0.5.4**: canary-based leak detection instead
+    of refusal detection, a separate indirect-injection surface, and a
+    categorised corpus. See [`ROADMAP.md`](https://github.com/vanjy-eng/model-gate/blob/main/ROADMAP.md).
+    Until then, consider setting `blocking=False` on this check if a false
+    alarm stopping a deploy is worse for you than a missed finding.
+
 ## Flags
 
 | Flag | Meaning |
