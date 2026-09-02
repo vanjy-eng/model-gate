@@ -374,6 +374,67 @@ left on the page, or if a check in the default suite is missing from
 The rest is judgement, and `--strict` cannot help: it catches a broken link,
 never a sentence that is no longer true. Read the pages you changed.
 
+## Versioning
+
+The project is pre-1.0, and `pyproject.toml` is the single source of truth for
+the number. Deciding which digit moves is a judgement, so here is the rule
+this project actually follows, and the question that matters more than the
+rule.
+
+### The question that decides it
+
+> **Can this change flip an existing verdict on unchanged inputs?**
+
+That is the only question a downstream user genuinely needs answered, because
+this library's output is a decision about whether a model ships. A pipeline
+pinned to `~=0.5.2` and upgraded overnight must not start blocking a model it
+passed yesterday without the release saying so.
+
+Adding a **blocking** check does exactly that. So does changing a default
+threshold, changing what a metric is compared against, or fixing a check that
+was silently returning the wrong number. Every one of those has happened here.
+
+Whatever digit moves, **a release that can flip a verdict says so in the first
+two paragraphs of its changelog entry**, naming which checks are affected and
+what a reader should do about it. That is not negotiable and it is not
+enforceable by tooling; it is the reason the changelog is written in prose.
+
+### Which digit
+
+| Digit | Move it when | Examples from this project |
+|---|---|---|
+| **major** (`1.0.0`) | the public API is declared stable, or — after 1.0 — a documented name, signature or return shape changes incompatibly | reserved: 1.0.0 is the subclassable `ModelAdapter` and the API freeze |
+| **minor** (`0.x.0`) | the suite can now grade something it structurally could not before — a new **task**, or a gap whose absence made the existing report *misleading* rather than merely incomplete | `0.2.0` a configurable metric (the score was hard-wired), `0.4.0` multiclass and ordinal, `0.5.0` separation and sufficiency — reporting demographic parity alone chose one of three incompatible notions silently |
+| **patch** (`0.x.y`) | anything else: new checks within an existing shape, new inputs, new plots, fixes, hardening, docs | `0.5.1` plots and the HTML report, `0.5.2` the validation category, `0.5.3` exposure and the actuarial measures |
+
+Two things that surprise people about that table.
+
+**A substantial feature release can be a patch bump.** `0.5.2` added a whole
+new category of five checks, four of them blocking, and `0.5.3` added four
+more. Both were patch releases. That is deliberate: pre-1.0, the second digit is reserved for *the
+shape of what the gate can grade* changing, and adding checks inside an
+existing shape is not that, however much work it was.
+
+**A patch release can be the most disruptive in the file.** `0.2.1` was three
+bug fixes, and one of them — binarising `y_pred` before comparing selection
+rates — turned a parity difference that had been *always exactly* `0.000` into
+a real number. Every user following the documented quickstart went from a
+clean `PASS` to a live `DISPARITY_RISK`, because the old behaviour was wrong.
+Read the changelog, not the digit.
+
+### The four places the version lives
+
+`pyproject.toml`, `bdp_model_gate/__init__.py`, the `## [x.y.z]` heading in
+`CHANGELOG.md`, and the website. `tests/test_package.py` fails if any of them
+drifts, plus one more thing worth knowing: it also fails if **any**
+release-shaped version string is left anywhere on the landing page, because
+the page once advertised `0.4.1` through two releases while a stale figure sat
+further down it.
+
+```bash
+pytest tests/test_package.py -q      # the fastest way to check a bump is complete
+```
+
 ## CHANGELOG and ROADMAP
 
 These two files have a strict division, and it is enforced by convention rather
@@ -392,13 +453,85 @@ Write changelog entries so they are useful a year later. "Fixed a bug in
 `DisparateImpactCheck`" says nothing; say what was wrong, what it produced, and
 why nothing caught it.
 
+### Cutting a release entry
+
+The mechanics, in order, because the two files have to move together:
+
+1. **Bump `pyproject.toml` and `__init__.py`.**
+2. **Insert the entry under `## [Unreleased]`**, which stays at the top and
+   stays empty. New entries go *below* it, never in place of it.
+3. **Open with a one-line theme**, then a paragraph on *why the release
+   exists* — what was wrong or missing before it. Look at `0.5.2` and `0.5.3`
+   for the length and register. Then `### Added` / `### Changed` / `### Fixed`.
+4. **Say what can flip a verdict**, per the rule above.
+5. **Add the compare link at the foot of the file**, and repoint
+   `[Unreleased]` at the new tag. Easy to forget, and it silently breaks every
+   link below it.
+6. **Delete the release's section from `ROADMAP.md`** and update its
+   `Current release: … Next: …` line. Shipped entries are removed, not marked
+   done — a roadmap of ticked boxes is a changelog with worse formatting.
+7. **Work through the site checklist** in
+   [The site ships with the release](#the-site-ships-with-the-release).
+
+Two conventions that are easy to get wrong:
+
+- **A roadmap entry is a plan, and plans change.** If the release ends up
+  differing from what the roadmap said, the *changelog* records what shipped
+  and the roadmap entry is deleted regardless. Do not retro-edit the roadmap
+  to match; that loses the fact that a decision was revised.
+- **Prose figures go stale in silence.** Check counts, plot counts, notebook
+  counts, mutation figures. `tests/test_package.py` catches the check-coverage
+  and version cases and nothing else, so grep for the old number before you
+  are done.
+
+Mutation figures are the one exception to "keep the numbers current". They are
+labelled by the release that measured them (*"at 0.5.2 the suite reports …"*),
+which stays true forever, and the run takes 25 minutes. Re-measure when you
+are hardening an area, not on every release, and re-label rather than
+overwrite.
+
+## Branches
+
+One branch per unit of work, named for the kind of change it is:
+
+| Prefix | For |
+|---|---|
+| `feat/` | a new capability — a check, an input, a task |
+| `fix/` | a bug, especially a wrong-but-plausible number |
+| `docs/` | prose, the website, the notebooks, `CONTRIBUTING.md` |
+| `chore/` | tooling, CI, dependencies, release plumbing |
+
+Four rules, and the last one matters most.
+
+1. **Branch from an up-to-date `main`.** `git fetch origin && git rebase
+   origin/main` before you start — worth double-checking, since a stale local
+   `main` produces a branch missing the previous release entirely, and the
+   conflict surfaces in `CHANGELOG.md` at the worst moment.
+2. **A release branch is named in its `ROADMAP.md` entry.** `0.6.0` says
+   `**Branch:** feat/uncertainty`, so that is the branch. Naming it up front is
+   what keeps a release from being assembled out of four unrelated branches
+   whose merge order matters.
+3. **Do not reuse a merged branch name.** Every branch in this repo is kept
+   after merge rather than deleted, so `feat/robustness` and `docs/roadmap-0.5-0.6`
+   still exist and still point at their old tips. Reusing one produces a
+   diff against history nobody can read.
+4. **A branch changes one kind of thing.** The version bump, the changelog
+   entry and the site update belong to the release branch that earns them; a
+   `docs/` branch never bumps a version. The temptation is always to fold a
+   small unrelated fix into the release branch — resist it, because the release
+   PR is the one a reviewer reads most carefully and every unrelated line
+   spends that attention.
+
+The one case where mixing is right: a **stale figure the release itself
+created** — a check count, a plot count — is part of that release, not a
+separate docs change. If the number was wrong *before* the release, it is a
+`docs/` branch.
+
 ## Pull requests
 
 The `main` branch requires a PR — direct pushes are blocked by a ruleset.
 
-1. Branch from an up-to-date `main` (`git fetch origin && git rebase origin/main`
-   — worth double-checking, since a stale local `main` produces a branch missing
-   the previous release entirely).
+1. Branch from an up-to-date `main`, named per [Branches](#branches) above.
 2. Make the change, with tests.
 3. Run the local loop above, and `./web/build.sh` if you touched docs.
 4. Open a PR against `main`. CI must be green, including the docs build.
