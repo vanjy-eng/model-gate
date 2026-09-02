@@ -158,14 +158,31 @@ config.actuarial.dislocation_threshold = 0.15
 | `adversarial_max_relative_shift` | `0.10` | regression |
 | `adversarial_max_rank_shift` | `0.10` | ordinal |
 | `pii_patterns` | email, Nigerian phone, NIN/BVN | a `dict[str, regex]` |
-| `jailbreak_prompts` | three canned prompts | a list of strings |
+| `injection_depth` | `1` | six prompts, one per attack family. `2` fires the whole corpus |
+| `injection_families` | `None` | narrow the corpus to the families relevant to your deployment |
+| `redact_injection_responses` | `True` | replace `pii_patterns` matches in a stored response with `[redacted:<type>]` |
+| `injection_response_chars` | `280` | how much of each response to keep as evidence |
+| `extra_injection_prompts` | `[]` | prompts of your own, fired as the `custom` family |
+| `report_injection_patterns` | four patterns | instruction-shaped text in feature names and model-card values |
 
 ```python
 config.security.pii_patterns = {
     **config.security.pii_patterns,
     "iban": r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b",
 }
+config.security.injection_depth = 2  # the whole corpus; costs more calls
+config.security.injection_families = ["encoding", "context_flooding"]
 ```
+
+!!! warning "`injection_depth` is a bill, not a thoroughness dial"
+    Every corpus prompt is a billed generation **on every surface you
+    supply** — so depth 2 against both `generate_fn` and `inject_fn` is
+    roughly thirty calls per gate run. The count is logged at INFO before the
+    calls are made, and recorded in each result's metadata after.
+
+The two things that actually decide whether the injection check can reach a
+verdict are not thresholds at all: they are `context.canaries` and
+`context.inject_fn`. See [Generative side-cars](../security.md).
 
 ## From a file
 
@@ -195,7 +212,15 @@ YAML needs `pyyaml`; TOML needs `tomli` on Python < 3.11.
 |---|---|---|
 | `PerformanceConfig.min_accuracy` | `min_score` + `metric` | 0.2.1 |
 | `GateReport.model_auc` | `model_metric` + `model_score` | 0.2.1 |
+| `SecurityConfig.jailbreak_prompts` | `extra_injection_prompts` | 0.5.4 |
 
-Both still work and emit a `DeprecationWarning`. `min_accuracy` was
-misleading: it was compared against ROC AUC when scikit-learn was installed
-and accuracy when it was not, with nothing in the report saying which.
+All three still work and emit a `DeprecationWarning`.
+
+`min_accuracy` was misleading: it was compared against ROC AUC when
+scikit-learn was installed and accuracy when it was not, with nothing in the
+report saying which.
+
+`jailbreak_prompts` described the old design. Three canned prompts *were* the
+whole injection check until 0.5.4; they are now the smallest part of a
+categorised corpus, and the interesting knobs are which families to fire and
+how deep rather than which three strings to send.

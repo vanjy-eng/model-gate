@@ -36,9 +36,34 @@ class StructuredGateContext:
             performance gate.
         model_card: Dict describing the model (legal_basis, use_case, etc.),
             for the compliance gate.
-        generate_fn: callable(str) -> str, the entry point of any generative
-            component sitting alongside the structured model, for prompt
-            injection testing.
+        generate_fn: `fn(str) -> str`, the entry point of any generative
+            component sitting alongside the structured model — an explanation
+            writer, a chatbot, a report generator. This is the **direct**
+            injection surface: the payload arrives as the user turn.
+        inject_fn: `fn(payload: str) -> str`, where the payload is placed
+            wherever your pipeline puts *retrieved* content — a claim
+            description, a customer email, a broker note, an uploaded
+            document. This is the **indirect** surface, and it is the one
+            that matters for a bank or an insurer: the realistic attack is
+            not a user typing "ignore previous instructions", it is untrusted
+            text arriving as data. The payload signature is what lets one
+            corpus be fired at both surfaces, and the two are reported
+            separately — a model hardened against the first and open to the
+            second is the common case.
+        canaries: Strings that must never appear in generated output: the
+            system prompt itself, a planted fake PII record, an internal URL,
+            a pricing rule. **This is what makes the injection check
+            gateable.** "Did the model refuse?" is not decidable from a
+            string; "did the secret come back out?" is, so a canary in a
+            response is an unambiguous leak and blocks. Without canaries the
+            leak attacks can only be routed to a human for judgement.
+        judge_fn: `fn(prompt: str, response: str) -> bool`, returning True if
+            the injection succeeded. Optional, for teams who want a model in
+            the loop on the cases a canary cannot decide. Never required,
+            never the default, and never a network call this library makes on
+            its own initiative — it is called only for responses that are
+            otherwise unjudgeable, and an exception from it degrades to
+            "needs review" rather than failing the gate.
         expected_loss: Per-row expected loss (or technical/pure premium),
             row-aligned to X. Enables `LossRatioParityCheck`, which asks
             whether one group is charged a higher margin over its own
@@ -114,6 +139,9 @@ class StructuredGateContext:
     cost_per_inference: float | None = None
     model_card: dict | None = None
     generate_fn: Callable[[str], str] | None = None
+    inject_fn: Callable[[str], str] | None = None
+    canaries: Sequence[str] | None = None
+    judge_fn: Callable[[str, str], bool] | None = None
     expected_loss: Sequence[float] | None = None
     exposure: Sequence[float] | None = None
     baseline_pred: Sequence[float] | None = None

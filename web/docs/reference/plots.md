@@ -1,6 +1,6 @@
 # Plots
 
-We are not replacing your plotting library. Thirteen checks draw a chart, and
+We are not replacing your plotting library. Fourteen checks draw a chart, and
 each one exists because a scalar loses something a reviewer needs.
 
 ```bash
@@ -61,8 +61,9 @@ matrix is four numbers the detail line already carries.
 | Lorenz curve | `risk_discrimination` | a Gini earned on one dreadful decile and one spread across the book are the same number |
 | Partial dependence | `monotonicity` | "not monotone" does not say whether the curve dips once or sags through the middle |
 | Change histogram | `prediction_dislocation` | a tight bump past the threshold is a rounding decision; a long tail is a conduct problem |
+| Injection bars | `prompt_injection` | *which* attack family, and on *which* surface — the finding a single score erases |
 
-Five deserve a longer note.
+Six deserve a longer note.
 
 ### The threshold sweep
 
@@ -94,6 +95,18 @@ detail string already describes in full, and charting it would be decoration.
 When a filed constraint *is* violated, the shape is the remedy: a single dip in
 a thin cell is a segment to refit, and a sag through the middle of the book is
 a structural problem.
+
+### The injection bars, direct against indirect
+
+The finding this check exists to surface is not "injection risk", it is
+*which family, on which surface*. A side-car hardened against a customer
+typing "ignore previous instructions" and wide open to the same text arriving
+inside a claim description is the common case, and any single score erases
+it. Two bars per family put it in one glance.
+
+Probes routed to a human are excluded from the bars, so **a short bar is not
+the same as a clean one** — the caption says so, because the alternative is a
+chart that reads as a pass when nothing could be judged.
 
 ### The robustness sweep — opt in
 
@@ -127,10 +140,14 @@ different rows than the verdict came from. Three things prevent it:
   `group_loss_ratio`, the ECE rebuilt from the plotted points and their marker
   areas, and the Gini re-integrated from the drawn Lorenz curve.
 
-Two of the actuarial plots take the strongest available form of this: the A/E
-bars and the monotonicity curve are read **straight out of `metadata`**, so
-the chart is the finding rather than a second computation of it. Where a
-finding is a small table, storing it and drawing from it beats recomputing.
+Three plots take the strongest available form of this: the A/E bars, the
+monotonicity curve and the injection bars are read **straight out of
+`metadata`**, so the chart is the finding rather than a second computation of
+it. Where a finding is a small table, storing it and drawing from it beats
+recomputing.
+
+For the injection bars that is not merely tidier. Redrawing would mean firing
+the corpus at a metered endpoint a second time.
 
 If you write your own `plot()`, hold it to the same standard: recompute from
 the check's own helper, or assert the drawn value against `metadata`.

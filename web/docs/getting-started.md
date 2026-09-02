@@ -96,4 +96,4 @@ Exit codes are `0`, `2` and `1` for the three statuses, so a pipeline can tell
 - [Concepts](concepts.md) — how the pieces fit
 - Your task: [binary](tasks/binary.md) · [multiclass](tasks/multiclass.md) · [regression](tasks/regression.md)
 - [Reports and plots](reference/reports.md) — what a reviewer actually reads
-- [Examples](examples/index.md) — six runnable notebooks
+- [Examples](examples/index.md) — eight runnable notebooks

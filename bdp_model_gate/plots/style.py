@@ -147,6 +147,13 @@ def markers(n: int) -> list[str]:
     return [MARKERS[i % len(MARKERS)] for i in range(n)]
 
 
+def hatches(n: int) -> list[str]:
+    """Bar hatchings to pair with `categorical`, for the same reason `markers`
+    exists: these reports get printed in greyscale, so colour is never allowed
+    to be the only thing distinguishing two series."""
+    return [HATCHES[i % len(HATCHES)] for i in range(n)]
+
+
 def caption(ax: Any, text: str) -> None:
     """A note below the axes saying how to read the plot.
 
@@ -268,6 +275,7 @@ __all__ = [
     "VERDICT_COLOURS",
     "apply_style",
     "categorical",
+    "hatches",
     "markers",
     "new_axes",
     "themeable_svg",

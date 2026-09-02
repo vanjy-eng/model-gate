@@ -1,6 +1,6 @@
 # Examples
 
-Seven notebooks, each executed and committed with outputs. None needs external
+Eight notebooks, each executed and committed with outputs. None needs external
 data or credentials.
 
 | Notebook | Task | Domain | Model |
@@ -12,18 +12,24 @@ data or credentials.
 | [05 Boosters and the CLI](05_boosters_and_cli.ipynb) | binary | fraud | XGBoost, `--model-loader` |
 | [06 Reports and plots](06_reports_and_plots.ipynb) | all three | credit, pricing, underwriting | `LogisticRegression`, plain functions |
 | [07 Insurance pricing](07_insurance_pricing_end_to_end.ipynb) | regression, exposure | motor tariff end to end | `GradientBoostingRegressor` + business rules |
+| [08 Generative side-cars](08_generative_side_car.ipynb) | binary + a side-car | claims explanation assistant | a scripted LLM stand-in |
 
 **Start with 01.** It covers the core machinery — contexts, checks, reports,
 verdicts, configuration, custom checks, plugins, validation and the CLI. The
 others assume it and focus on what their task or framework changes.
 
-**06 is the other half** — the thirteen charts, why each one is not a number,
+**06 is the other half** — the fourteen charts, why each one is not a number,
 and the self-contained [HTML report](../reference/reports.md) a reviewer signs.
 
 **07 is the domain case** — the same machinery pointed at a rate filing:
 exposure weighting, actual-vs-expected by decile, the Lorenz Gini against its
 ceiling, a filed monotonicity constraint the tariff breaks, and who gets an
 increase. See [Insurance pricing](../tasks/insurance.md). Read it after 03.
+
+**08 is the generative half** — prompt injection tested for *leakage* rather
+than for refusal, both surfaces, and a canary leak caught. No network and no
+credentials: the side-car is a scripted stand-in. See
+[Generative side-cars](../security.md).
 
 ## Running them
 
@@ -34,7 +40,7 @@ jupyter lab examples/
 
 01–03 need nothing more. 04 needs `torch`; 05 needs `xgboost` (and
 `brew install libomp` on macOS, which XGBoost requires there regardless);
-06 and 07 need the [`[plots]` extra](../reference/plots.md).
+06, 07 and 08 need the [`[plots]` extra](../reference/plots.md).
 
 !!! note "Why PyTorch and XGBoost are in separate notebooks"
     On macOS the two link different OpenMP runtimes and **segfault in the same
