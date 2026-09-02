@@ -104,6 +104,7 @@ nav:
       - Regression: tasks/regression.md
       - Insurance pricing: tasks/insurance.md
   - Any model: models.md
+  - Generative side-cars: security.md
   - Reference:
       - The checks: reference/checks.md
       - Configuration: reference/configuration.md
@@ -121,3 +122,4 @@ nav:
       - 05 Boosters and the CLI: examples/05_boosters_and_cli.ipynb
       - 06 Reports and plots: examples/06_reports_and_plots.ipynb
       - 07 Insurance pricing: examples/07_insurance_pricing_end_to_end.ipynb
+      - 08 Generative side-cars: examples/08_generative_side_car.ipynb

@@ -571,7 +571,7 @@ deliberately out of scope, so nobody builds them by surprise:
 - **Mitigation.** The gate measures and reports; it does not reweight, calibrate
   or resample your model. Deciding what to do about a finding is the
   practitioner's job.
-- **Being a plotting library.** The thirteen plots explain thirteen findings.
+- **Being a plotting library.** The fourteen plots explain fourteen findings.
   Anything more general belongs in your own code.
 
 `ci_examples/` is a separate thing again: those are pre-deployment gates for

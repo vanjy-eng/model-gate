@@ -45,6 +45,7 @@ logger = get_logger("cli")
 #: honoured deprecated key is how a stale threshold survives a rename.
 DEPRECATED_CONFIG_KEYS = {
     ("performance", "min_accuracy"): "min_score",
+    ("security", "jailbreak_prompts"): "extra_injection_prompts",
 }
 
 
@@ -64,6 +65,68 @@ def _split_labels(value: str | None) -> list[str] | None:
     return labels
 
 
+def _call_factory(spec: str, flag: str):
+    """Imports and calls a `"package.module:factory"` spec.
+
+    Shared by every `--*-loader` flag. The import is the caller's, not this
+    library's: a generative side-car needs an SDK and a set of credentials
+    that have no business being a dependency of a governance gate.
+    """
+    if ":" not in spec:
+        raise BDPModelGateError(f"{flag} must be 'package.module:factory', got {spec!r}")
+    module_name, _, attr = spec.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise BDPModelGateError(
+            f"could not import {module_name!r} for {flag} — is it on PYTHONPATH? ({exc})"
+        ) from exc
+    try:
+        factory = getattr(module, attr)
+    except AttributeError as exc:
+        raise BDPModelGateError(f"module {module_name!r} has no attribute {attr!r}") from exc
+    if not callable(factory):
+        raise BDPModelGateError(f"{spec!r} is not callable")
+    return factory()
+
+
+def _load_text_fn(spec: str | None, flag: str):
+    """A `fn(str) -> str` from a loader spec, for the injection surfaces.
+
+    Kept separate from `_load_via_loader` because the contract is different:
+    a model may expose `.predict()`, but a side-car has to be a plain
+    callable taking one string.
+    """
+    if not spec:
+        return None
+    loaded = _call_factory(spec, flag)
+    if not callable(loaded):
+        raise BDPModelGateError(
+            f"{spec!r} returned a {type(loaded).__name__}, but {flag} needs a factory "
+            "returning a callable that takes one string and returns one string"
+        )
+    logger.info("loaded %s via %s", flag, spec)
+    return loaded
+
+
+def _load_canaries(path: str | None) -> list[str] | None:
+    """Canaries from a file, one per line.
+
+    A file rather than a flag on purpose: a canary is usually a sentence from
+    a system prompt, and putting that on a command line puts it in the shell
+    history and the CI log of every run.
+    """
+    if not path:
+        return None
+    lines = [line.strip() for line in Path(path).read_text().splitlines()]
+    canaries = [line for line in lines if line and not line.startswith("#")]
+    if not canaries:
+        raise BDPModelGateError(
+            f"--canaries-file {path!r} contains no canaries — one per line, '#' for a comment"
+        )
+    return canaries
+
+
 def _load_via_loader(spec: str):
     """Imports and calls a `"package.module:factory"` loader.
 
@@ -79,23 +142,7 @@ def _load_via_loader(spec: str):
 
         bdp-model-gate --model-loader "mypkg.serving:load_scorer" ...
     """
-    if ":" not in spec:
-        raise BDPModelGateError(f"--model-loader must be 'package.module:factory', got {spec!r}")
-    module_name, _, attr = spec.partition(":")
-    try:
-        module = importlib.import_module(module_name)
-    except ImportError as exc:
-        raise BDPModelGateError(
-            f"could not import {module_name!r} for --model-loader — is it on PYTHONPATH? ({exc})"
-        ) from exc
-    try:
-        factory = getattr(module, attr)
-    except AttributeError as exc:
-        raise BDPModelGateError(f"module {module_name!r} has no attribute {attr!r}") from exc
-    if not callable(factory):
-        raise BDPModelGateError(f"{spec!r} is not callable")
-
-    loaded = factory()
+    loaded = _call_factory(spec, "--model-loader")
     if not (callable(loaded) or hasattr(loaded, "predict")):
         raise BDPModelGateError(
             f"{spec!r} returned a {type(loaded).__name__}, which is neither callable nor "
@@ -236,6 +283,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Column in --data holding a per-row expected loss or technical premium. "
             "Enables the loss-ratio parity fairness check for regression models."
+        ),
+    )
+    parser.add_argument(
+        "--generate-loader",
+        help=(
+            "A 'package.module:factory' function returning a fn(str) -> str: the "
+            "generative side-car's entry point. This is the DIRECT injection surface — "
+            "the payload arrives as the user turn. Your factory does the SDK import "
+            "and the credential handling, so neither is a dependency of this library"
+        ),
+    )
+    parser.add_argument(
+        "--inject-loader",
+        help=(
+            "A 'package.module:factory' function returning a fn(payload: str) -> str "
+            "that places the payload where your pipeline puts RETRIEVED content — a "
+            "claim description, a customer email, an uploaded document. This is the "
+            "indirect surface, and it is the one that matters for a regulated "
+            "deployment: the realistic attack is untrusted text arriving as data"
+        ),
+    )
+    parser.add_argument(
+        "--canaries-file",
+        help=(
+            "Path to a file of canaries, one per line ('#' for a comment): strings "
+            "that must never appear in generated output — a sentence from the system "
+            "prompt, a planted fake PII record, an internal URL. This is what makes "
+            "the injection check gateable: a canary in a response is a leak and blocks, "
+            "where without one the leak attacks can only be routed to a human"
         ),
     )
     parser.add_argument(
@@ -410,6 +486,9 @@ def main(argv=None) -> int:
             expected_loss=expected_loss,
             exposure=exposure,
             baseline_pred=baseline_pred,
+            generate_fn=_load_text_fn(args.generate_loader, "--generate-loader"),
+            inject_fn=_load_text_fn(args.inject_loader, "--inject-loader"),
+            canaries=_load_canaries(args.canaries_file),
             task=args.task,
             class_order=_split_labels(args.class_order),
             favourable_classes=_split_labels(args.favourable_classes),

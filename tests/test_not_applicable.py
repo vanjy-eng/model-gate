@@ -13,7 +13,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bdp_model_gate import ModelGate, PerformanceConfig, StructuredGateContext
+from bdp_model_gate import (
+    ModelGate,
+    PerformanceConfig,
+    SecurityConfig,
+    StructuredGateContext,
+)
 from bdp_model_gate.structured import default_structured_checks
 from bdp_model_gate.structured.actuarial_checks import (
     ActualVsExpectedCheck,
@@ -38,6 +43,7 @@ from bdp_model_gate.structured.security import (
     AdversarialRobustnessCheck,
     PIILeakageCheck,
     PromptInjectionCheck,
+    ReportInjectionCheck,
 )
 
 
@@ -171,10 +177,32 @@ def test_compliance_skips_without_a_model_card(base):
 
 
 def test_prompt_injection_skips_without_a_generative_component(base):
+    """And names *both* surfaces in the reason, because a reader who has no
+    chat turn may still have a pipeline pasting retrieved text into a prompt —
+    which is the surface that matters for a regulated deployment."""
     X, y = base
     result = _only(PromptInjectionCheck().run(_ctx(X, y, generate_fn=None)))
     assert result.flag == "NOT_APPLICABLE"
     assert "generative" in result.detail
+    assert "generate_fn" in result.detail and "inject_fn" in result.detail
+
+
+def test_prompt_injection_skips_when_every_family_is_excluded(base):
+    """A config that filters the corpus down to nothing must say so rather
+    than report a clean run of zero prompts."""
+    X, y = base
+    config = SecurityConfig(injection_families=["no_such_family"])
+    result = _only(PromptInjectionCheck(config).run(_ctx(X, y, generate_fn=lambda prompt: "no")))
+    assert result.flag == "NOT_APPLICABLE"
+    assert "injection_families" in result.detail
+
+
+def test_report_injection_skips_with_no_patterns_configured(base):
+    X, y = base
+    config = SecurityConfig(report_injection_patterns={})
+    result = _only(ReportInjectionCheck(config).run(_ctx(X, y)))
+    assert result.flag == "NOT_APPLICABLE"
+    assert "report_injection_patterns" in result.detail
 
 
 def test_performance_skips_without_any_benchmark_data(base):

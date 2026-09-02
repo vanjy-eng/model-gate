@@ -30,6 +30,7 @@ from .security import (
     AdversarialRobustnessCheck,
     PIILeakageCheck,
     PromptInjectionCheck,
+    ReportInjectionCheck,
 )
 from .validation_checks import (
     FeatureContractCheck,
@@ -87,6 +88,10 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         AdversarialRobustnessCheck(config.security),
         PIILeakageCheck(config.security),
         PromptInjectionCheck(config.security),
+        # The only check whose victim is not the model under test: this one
+        # asks whether the library is about to copy someone else's
+        # instructions into a report an LLM will read.
+        ReportInjectionCheck(config.security),
     ]
     if include_plugins:
         from ..registry import discover_plugin_checks
@@ -121,5 +126,6 @@ __all__ = [
     "AdversarialRobustnessCheck",
     "PIILeakageCheck",
     "PromptInjectionCheck",
+    "ReportInjectionCheck",
     "default_structured_checks",
 ]

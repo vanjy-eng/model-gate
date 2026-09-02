@@ -62,6 +62,9 @@ def load_scorer():
 | `--latencies PATH` | one latency in ms per line |
 | `--cost-per-inference FLOAT` | |
 | `--model-card PATH` | JSON model card |
+| `--generate-loader "pkg.mod:factory"` | a factory returning `fn(str) -> str` — the generative side-car, direct surface |
+| `--inject-loader "pkg.mod:factory"` | a factory returning `fn(payload) -> str` — the indirect surface, where retrieved content goes |
+| `--canaries-file PATH` | strings that must never appear in generated output, one per line |
 
 The three column flags name columns of `--data` that are **not** features, and
 each is read out and then dropped from `X`. Leaving last quarter's premium in
@@ -84,6 +87,27 @@ bdp-model-gate \
   --task regression --metric lorenz_gini --min-score 0.15 \
   --config pricing_gate.yaml
 ```
+
+The injection check was Python-only until 0.5.4 — there is no way to put a
+callable on a command line. The three flags above follow `--model-loader`:
+**your factory does the SDK import and the credential handling**, so neither is
+a dependency of a governance gate.
+
+```bash
+bdp-model-gate \
+  --model claims_model.joblib \
+  --data validation.csv --target-col declined \
+  --generate-loader "mypkg.sidecar:load_chat" \
+  --inject-loader "mypkg.sidecar:load_claim_summariser" \
+  --canaries-file canaries.txt \
+  --config gate.yaml
+```
+
+`--canaries-file` is a file rather than a flag on purpose: a canary is usually
+a sentence from a system prompt, and putting that on a command line puts it in
+the shell history and the CI log of every run. One per line, `#` for a
+comment. Without canaries the leak probes can only be routed to a human — see
+[Generative side-cars](../security.md).
 
 `--train-data` reads columns and distributions only, never labels: the target
 column is dropped if present, and the two frames need no row alignment. Give

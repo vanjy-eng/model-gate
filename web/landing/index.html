@@ -484,7 +484,7 @@
     <a class="wordmark" href="#top">
       <span class="mark" aria-hidden="true"></span>
       BDP Model Gate
-      <span class="version">0.5.3</span>
+      <span class="version">0.5.4</span>
     </a>
     <nav>
       <a href="#start">Getting started</a>
@@ -513,6 +513,13 @@
       Lorenz Gini against the ceiling your book allows, filed monotonicity
       constraints checked by partial dependence, and how much of the book moves
       when a tariff replaces its incumbent.
+    </p>
+    <p class="lede" style="margin-top:.7rem;">
+      And it tests the generative side-car bolted to your model for
+      <strong>indirect prompt injection</strong> — untrusted text arriving as a
+      claim note or a customer email rather than as a chat message, which is the
+      attack a regulated pipeline actually faces. Canary-based, so a leak is
+      proof rather than a guess.
     </p>
 
     <div class="cta-row">
@@ -597,14 +604,14 @@
       </a>
       <a class="quad-card" href="docs/examples/">
         <h3>Examples</h3>
-        <p>Seven runnable notebooks: binary, multiclass, regression, PyTorch, boosters, reports, insurance pricing.</p>
+        <p>Eight runnable notebooks: binary, multiclass, regression, PyTorch, boosters, reports, insurance pricing, generative side-cars.</p>
         <span class="go">Open the notebooks →</span>
       </a>
     </div>
   </section>
 
   <section class="wrap divider" id="checks">
-    <span class="eyebrow">Twenty-five checks, five categories</span>
+    <span class="eyebrow">Twenty-six checks, five categories</span>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">What gets checked</h2>
     <p class="prose" style="margin-top:.9rem;">
       Optional inputs degrade rather than fail — omit protected attributes and
@@ -701,7 +708,8 @@
         <ul>
           <li><code>adversarial_robustness</code> — gradient-directed or random perturbation</li>
           <li><code>pii_leakage</code> — raw identifiers in feature columns</li>
-          <li><code>prompt_injection</code> — for any generative side-car</li>
+          <li><code>prompt_injection</code> — a categorised corpus, on the direct <em>and</em> indirect surfaces</li>
+          <li><code>report_injection</code> — instruction-shaped text this report would carry onward</li>
         </ul>
       </article>
 
@@ -865,7 +873,7 @@ report.to_json(<span class="c-str">"gate_report.json"</span>)
       </div>
     </div>
     <div class="colophon">
-      <span>BDP Model Gate 0.5.3</span>
+      <span>BDP Model Gate 0.5.4</span>
       <span>Maintained by Vangelis Oden</span>
       <span>MIT</span>
     </div>
