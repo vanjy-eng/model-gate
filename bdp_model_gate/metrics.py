@@ -564,15 +564,28 @@ def _resolve_auto(task: str = BINARY, exposure: Any = None) -> ResolvedMetric:
                 exposure_weighted=was_weighted,
             )
         if spec.fallback is not None:
-            logger.warning(
-                "performance.metric='auto': %r is unavailable (scikit-learn not installed) — "
-                "scoring with %r instead. Set performance.metric explicitly to silence this, "
-                "and remember min_score is interpreted against %r, not %r.",
-                preferred,
-                spec.name,
-                spec.name,
-                preferred,
-            )
+            if spec.name == preferred:
+                # Same metric, different arithmetic. The old message here said
+                # "'r2' is unavailable — scoring with 'r2' instead ... min_score
+                # is interpreted against 'r2', not 'r2'", which is nonsense and
+                # the same false claim `used_fallback_impl` used to make.
+                logger.debug(
+                    "performance.metric='auto': scoring %r with the built-in numpy "
+                    "implementation (scikit-learn not installed). Same metric, same "
+                    "threshold.",
+                    spec.name,
+                )
+            else:
+                logger.warning(
+                    "performance.metric='auto': %r is unavailable (scikit-learn not "
+                    "installed) — scoring with %r instead. Set performance.metric "
+                    "explicitly to silence this, and remember min_score is interpreted "
+                    "against %r, not %r.",
+                    preferred,
+                    spec.name,
+                    spec.name,
+                    preferred,
+                )
             weighted_fn, was_weighted = _weighted(spec.fallback, spec, exposure)
             return ResolvedMetric(
                 spec.name,

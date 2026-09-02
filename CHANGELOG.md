@@ -126,6 +126,13 @@ rate, and an unweighted RMSE says they are.**
   where scikit-learn was installed and working. `used_fallback_impl` now means
   what it says: scikit-learn has a form of this metric and it could not be
   loaded. Nothing about the score changes; the sentence beside it was wrong.
+- **The same false claim, in a log line.** `metric="auto"` on a regression task
+  resolves to `r2`, which scikit-learn *does* define — so on a core install the
+  numpy implementation stands in and the metric is unchanged. The warning read
+  `'r2' is unavailable — scoring with 'r2' instead ... min_score is interpreted
+  against 'r2', not 'r2'`. It is now a debug line saying what actually happened,
+  and a genuine substitution (`roc_auc` → `accuracy` on a binary task) still
+  warns.
 
 ### Tie handling, because order-independence is a promise here
 The Lorenz curve aggregates rows sharing a predicted value into a single

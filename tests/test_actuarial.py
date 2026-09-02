@@ -663,9 +663,14 @@ def test_the_numpy_weighted_metrics_agree_with_scikit_learn():
     )
 
 
-def test_the_report_says_when_a_metric_could_not_take_the_weighting(caplog):
+def test_the_report_says_when_a_metric_could_not_take_the_weighting():
     """Silently dropping the exposure would put an unweighted number in a
-    report whose reader believes it is weighted."""
+    report whose reader believes it is weighted.
+
+    Scored with `accuracy` rather than `roc_auc` on purpose: accuracy has a
+    numpy implementation, so this runs on a **core install** too — which is
+    the job that exists to keep the degradation paths honest.
+    """
     n = 100
     context = StructuredGateContext(
         X=pd.DataFrame({"x": np.arange(n, dtype=float)}),
@@ -677,7 +682,7 @@ def test_the_report_says_when_a_metric_could_not_take_the_weighting(caplog):
     )
     from bdp_model_gate import PerformanceConfig
 
-    result = PerformanceThresholdCheck(PerformanceConfig(metric="roc_auc", min_score=0.0)).run(
+    result = PerformanceThresholdCheck(PerformanceConfig(metric="accuracy", min_score=0.0)).run(
         context
     )[0]
     assert result.metadata["exposure_weighted"] is False
@@ -874,3 +879,38 @@ def test_a_metric_scikit_learn_does_not_define_is_not_reported_as_a_fallback():
 
     assert BUILTIN_METRICS["mae"].sklearn_fn == "mean_absolute_error"
     assert BUILTIN_METRICS["rmse"].sklearn_fn == ""
+
+
+def test_auto_does_not_warn_about_substituting_a_metric_for_itself():
+    """The same false-claim class as the fallback note, in a log line.
+
+    `metric="auto"` on a regression task resolves to `r2`, which scikit-learn
+    defines — so without scikit-learn the numpy implementation stands in and
+    the *metric* is unchanged. The old message read "'r2' is unavailable —
+    scoring with 'r2' instead ... min_score is interpreted against 'r2', not
+    'r2'". A genuine substitution must still warn.
+    """
+    import logging
+
+    from bdp_model_gate.metrics import _resolve_auto
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("bdp_model_gate.metrics._load_sklearn_metric", lambda spec: None)
+
+        records = []
+        handler = logging.Handler()
+        handler.emit = records.append
+        logger = logging.getLogger("bdp_model_gate.metrics")
+        logger.addHandler(handler)
+        try:
+            same = _resolve_auto("regression")
+            warnings_for_same = [r for r in records if r.levelno >= logging.WARNING]
+            records.clear()
+            substituted = _resolve_auto("binary")
+            warnings_for_substitution = [r for r in records if r.levelno >= logging.WARNING]
+        finally:
+            logger.removeHandler(handler)
+
+    assert same.name == "r2" and not warnings_for_same
+    assert substituted.name == "accuracy", "binary auto really does substitute"
+    assert warnings_for_substitution, "a genuine substitution must still warn"
