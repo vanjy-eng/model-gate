@@ -688,6 +688,8 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
+| **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
+| **0.5.4** | Prompt injection, properly — canary-based leak detection, indirect injection, and a real attack corpus. |
 | **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
 | **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |
 | **1.0.0** | A public, subclassable `ModelAdapter`. |
