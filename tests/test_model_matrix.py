@@ -14,8 +14,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bdp_model_gate import GateConfig, ModelGate, PerformanceConfig, StructuredGateContext
+from bdp_model_gate import (
+    ActuarialConfig,
+    GateConfig,
+    ModelGate,
+    PerformanceConfig,
+    StructuredGateContext,
+)
 from bdp_model_gate.structured import default_structured_checks
+from bdp_model_gate.structured.actuarial_checks import RiskDiscriminationCheck
 
 sklearn = pytest.importorskip("sklearn", reason="the matrix fits real estimators")
 
@@ -59,6 +66,13 @@ VALID_FLAGS = {
     "FEATURE_CONTRACT_RISK",
     "FEATURE_ORDER_RISK",
     "DRIFT_RISK",
+    # 0.5.3 — exposure and the actuarial measures
+    "AE_LEVEL_RISK",
+    "AE_BAND_RISK",
+    "DISCRIMINATION_RISK",
+    "MONOTONICITY_RISK",
+    "MONOTONICITY_UNCHECKABLE",
+    "DISLOCATION_RISK",
 }
 
 CLASSIFIERS = {
@@ -167,11 +181,20 @@ def test_multiclass_across_model_families(data, name):
 
 @pytest.mark.parametrize("name", sorted(REGRESSORS))
 def test_regression_across_model_families(data, name):
+    """Every regression check against every regressor, with every optional
+    pricing input supplied — exposure, an incumbent premium and a declared
+    rating constraint. `MonotonicityCheck` in particular calls the model
+    `grid_points * max_rows` times through whatever prediction path the family
+    exposes, which is the shape that broke SHAP on RandomForest."""
     X, protected, _, _, y_reg = data
     model = REGRESSORS[name]().fit(X, y_reg)
     predictions = model.predict(X)
+    rng = np.random.default_rng(5)
 
-    config = GateConfig(performance=PerformanceConfig(metric="r2", min_score=-1e9))
+    config = GateConfig(
+        performance=PerformanceConfig(metric="r2", min_score=-1e9),
+        actuarial=ActuarialConfig(monotonic_features={"income": "increasing"}),
+    )
     report = ModelGate(checks=default_structured_checks(config, include_plugins=False)).run(
         StructuredGateContext(
             model=model,
@@ -180,11 +203,39 @@ def test_regression_across_model_families(data, name):
             y_pred=predictions,
             protected_df=protected,
             expected_loss=np.clip(predictions, 1.0, None),
+            exposure=rng.uniform(0.1, 1.0, len(X)),
+            baseline_pred=np.clip(predictions, 1.0, None) * rng.uniform(0.8, 1.1, len(X)),
             model_card=MODEL_CARD,
             task="regression",
         )
     )
     _assert_healthy(report, f"regression/{name}")
+
+    by_name = {r.check_name: r for r in report.results}
+    for check_name in ("actual_vs_expected", "risk_discrimination", "prediction_dislocation"):
+        assert by_name[check_name].flag != "NOT_APPLICABLE", f"{check_name} skipped for {name}"
+    assert by_name["monotonicity"].flag in {"OK", "MONOTONICITY_RISK"}
+
+
+@pytest.mark.parametrize("name", sorted(REGRESSORS))
+def test_the_gini_is_reported_for_every_regressor(data, name):
+    """A scikit-learn regressor can predict below zero, which the Lorenz curve
+    is not defined against. The check must skip with a reason rather than
+    raise — and must still report where the prediction is usable."""
+    X, _, _, _, y_reg = data
+    model = REGRESSORS[name]().fit(X, y_reg)
+    result = RiskDiscriminationCheck().run(
+        StructuredGateContext(
+            model=model,
+            X=X,
+            y_true=y_reg,
+            y_pred=model.predict(X),
+            task="regression",
+        )
+    )[0]
+    assert result.flag in {"OK", "DISCRIMINATION_RISK", "NOT_APPLICABLE"}
+    if result.flag != "NOT_APPLICABLE":
+        assert result.metadata["gini"] <= result.metadata["gini_ceiling"] + 1e-9
 
 
 @pytest.mark.parametrize("task", ["binary", "multiclass", "regression"])

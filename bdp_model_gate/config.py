@@ -210,6 +210,69 @@ class ValidationConfig:
 
 
 @dataclass
+class ActuarialConfig:
+    """Thresholds for the pricing measures — actual-vs-expected, monotonicity
+    and dislocation.
+
+    These are the three questions a pricing review asks that a general
+    regression suite does not. **Is the level right** (A/E), **is the shape
+    defensible** (monotone in each rating factor), and **who does the change
+    hurt** (dislocation against the incumbent).
+
+    All of them read `context.exposure` when it is supplied. See
+    `bdp_model_gate.actuarial` for the convention: `exposure` is the weight
+    a row's observation deserves, and it belongs on a target expressed as a
+    *rate*.
+    """
+
+    #: Prediction bands for the A/E curve, cut at equal *exposure* rather
+    #: than equal row counts. Ten is the pricing convention (deciles).
+    n_bands: int = 10
+    #: How far the whole book's A/E may sit from 1.0. Tighter than the band
+    #: tolerance on purpose: an overall A/E of 1.10 means the book is
+    #: under-priced by ten percent, which is a single, unambiguous defect.
+    max_overall_ae_deviation: float = 0.05
+    #: How far any one band's A/E may sit from 1.0. Looser, because a decile
+    #: is a smaller sample and some scatter is expected.
+    max_band_ae_deviation: float = 0.10
+    #: A band thinner than this is reported but not scored — the same
+    #: treatment `min_group_size` gives a three-policy segment.
+    min_band_rows: int = 20
+
+    #: Floor on the Lorenz Gini. Zero, and deliberately: there is no
+    #: defensible universal target — a motor book and a fire book discriminate
+    #: to different degrees for reasons that have nothing to do with model
+    #: quality — but a Gini at or below zero says the rating structure orders
+    #: risk no better than chance, or backwards, and that is a finding on any
+    #: book. Raise it to your own portfolio's benchmark if you have one.
+    min_gini: float = 0.0
+
+    #: Rating factors the model's output must move monotonically in, as
+    #: `{"prior_claims": "increasing"}`. Empty by default: the constraint is
+    #: a claim about your product and its regulator, and no library can guess
+    #: it. `MonotonicityCheck` reports NOT_APPLICABLE until you state one.
+    monotonic_features: dict[str, str] = field(default_factory=dict)
+    #: A step against the declared direction is a violation once it exceeds
+    #: this fraction of the curve's own range. Relative, so one value works
+    #: for a premium in naira and a probability alike.
+    monotonicity_tolerance: float = 0.02
+    #: Points on each partial-dependence curve, at quantiles of the feature.
+    monotonicity_grid_points: int = 10
+    #: Rows scored per grid point. The curve costs
+    #: `grid_points * max_rows` predictions, and a gate is not the place to
+    #: spend a million of them.
+    monotonicity_max_rows: int = 200
+
+    #: A relative move against `context.baseline_pred` at or beyond this is
+    #: a "dislocation". 25% is the figure most conduct reviews use.
+    dislocation_threshold: float = 0.25
+    #: Share of exposure allowed above that threshold before the check asks
+    #: for a human. Non-blocking either way — a dislocated book may be
+    #: entirely correct, and the question is whether it was intended.
+    max_dislocated_share: float = 0.10
+
+
+@dataclass
 class SecurityConfig:
     adversarial_epsilon: float = 0.02
     adversarial_flip_rate_threshold: float = 0.05
@@ -245,3 +308,4 @@ class GateConfig:
     compliance: ComplianceConfig = field(default_factory=ComplianceConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
+    actuarial: ActuarialConfig = field(default_factory=ActuarialConfig)

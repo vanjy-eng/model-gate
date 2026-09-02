@@ -30,7 +30,11 @@ import pandas as pd  # noqa: E402
 
 from bdp_model_gate import ModelGate, StructuredGateContext  # noqa: E402
 from bdp_model_gate.calibration import expected_calibration_error  # noqa: E402
-from bdp_model_gate.config import FairnessConfig, PerformanceConfig  # noqa: E402
+from bdp_model_gate.config import (  # noqa: E402
+    ActuarialConfig,
+    FairnessConfig,
+    PerformanceConfig,
+)
 from bdp_model_gate.core.base import BaseCheck  # noqa: E402
 from bdp_model_gate.exceptions import GateConfigurationError  # noqa: E402
 from bdp_model_gate.plots import (  # noqa: E402
@@ -524,3 +528,164 @@ def test_worst_result_ignores_results_without_the_key():
     assert worst_result([Fake({}), Fake({})], "gap") is None
     assert worst_result(None, "gap") is None
     assert worst_result([Fake({"gap": 0.1}), Fake({"gap": 0.4})], "gap").metadata["gap"] == 0.4
+
+
+# --------------------------------------------------------------------------
+# The actuarial plots (0.5.3)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def actuarial_context():
+    """A pricing book with a real rating factor, an incumbent to be compared
+    against, and exposure — so all four actuarial plots have something to say."""
+    X, _, protected, _ = _credit_frame()
+    rng = np.random.default_rng(23)
+    n = len(X)
+    claims = rng.integers(0, 5, n).astype(float)
+    X = X.assign(prior_claims=claims)
+
+    # Premium *falls* with prior claims: a filed-rate violation, so the
+    # monotonicity plot has a break to mark.
+    def predict(frame):
+        return 60_000.0 - 4_000.0 * frame["prior_claims"].to_numpy()
+
+    premium = predict(X)
+    actual = premium * rng.gamma(6, 1 / 6, n) * np.where(premium > premium.mean(), 1.35, 0.8)
+    baseline = premium * rng.uniform(0.7, 1.05, n)
+    return StructuredGateContext(
+        model=None,
+        X=X,
+        y_true=np.clip(actual, 1.0, None),
+        y_pred=premium,
+        protected_df=protected,
+        predict_fn=predict,
+        exposure=np.clip(rng.uniform(0.1, 1.0, n), 0.05, 1.0),
+        baseline_pred=baseline,
+        task="regression",
+    )
+
+
+def test_actual_over_expected_bars_are_the_reported_band_ratios(actuarial_context):
+    """The bars are read straight off the band table, so the chart cannot be a
+    second computation that quietly disagrees with the verdict."""
+    from bdp_model_gate.structured.actuarial_checks import ActualVsExpectedCheck
+
+    check = ActualVsExpectedCheck()
+    results = check.run(actuarial_context)
+    finding = next(r for r in results if r.metadata.get("measure") == "bands")
+    ax = check.plot(actuarial_context, results)
+
+    heights = [patch.get_height() for patch in ax.patches]
+    assert heights == pytest.approx([b["ae"] for b in finding.metadata["bands"]])
+    assert 1.0 in set(line.get_ydata()[0] for line in ax.lines), "break-even must be drawn"
+
+
+def test_unscored_bands_are_distinguishable_without_colour(actuarial_context):
+    """These reports get printed. A band the check refused to score must not
+    be identifiable by hue alone."""
+    from bdp_model_gate.structured.actuarial_checks import ActualVsExpectedCheck
+
+    check = ActualVsExpectedCheck(ActuarialConfig(min_band_rows=10_000))
+    results = check.run(actuarial_context)
+    ax = check.plot(actuarial_context, results)
+    assert all(patch.get_hatch() for patch in ax.patches)
+
+
+def test_the_lorenz_curve_reproduces_the_reported_gini(actuarial_context):
+    """Rebuild the index from the drawn line. If the curve and the scalar ever
+    part company, this is what notices."""
+    from bdp_model_gate.structured.actuarial_checks import RiskDiscriminationCheck
+
+    check = RiskDiscriminationCheck()
+    results = check.run(actuarial_context)
+    ax = check.plot(actuarial_context, results)
+
+    model_line = next(line for line in ax.lines if line.get_label() == "model")
+    xs, ys = np.asarray(model_line.get_xdata()), np.asarray(model_line.get_ydata())
+    area = float(np.sum(np.diff(xs) * (ys[1:] + ys[:-1]) / 2.0))
+    assert 1.0 - 2.0 * area == pytest.approx(results[0].metadata["gini"], abs=1e-4)
+
+
+def test_the_lorenz_ceiling_is_drawn_above_the_model(actuarial_context):
+    """ "Is 0.28 good?" is unanswerable; "0.28 of a possible 0.52" is not. The
+    ceiling has to be on the chart, and it has to bound the model."""
+    from bdp_model_gate.structured.actuarial_checks import RiskDiscriminationCheck
+
+    check = RiskDiscriminationCheck()
+    ax = check.plot(actuarial_context)
+    labels = {line.get_label() for line in ax.lines}
+    assert "model" in labels and "ceiling — sorted by outcome" in labels
+
+    curves = {line.get_label(): line for line in ax.lines if line.get_label() in labels}
+    grid = np.linspace(0.05, 0.95, 19)
+    model = np.interp(grid, *_line(curves["model"]))
+    ceiling = np.interp(grid, *_line(curves["ceiling — sorted by outcome"]))
+    assert np.all(ceiling <= model + 1e-9), "the ceiling must concentrate losses at least as hard"
+
+
+def _line(line):
+    return np.asarray(line.get_xdata()), np.asarray(line.get_ydata())
+
+
+def test_the_monotonicity_curve_is_the_curve_that_was_judged(actuarial_context):
+    from bdp_model_gate.structured.actuarial_checks import MonotonicityCheck
+
+    check = MonotonicityCheck(ActuarialConfig(monotonic_features={"prior_claims": "increasing"}))
+    results = check.run(actuarial_context)
+    finding = results[0]
+    ax = check.plot(actuarial_context, results)
+
+    drawn = ax.lines[0]
+    assert list(drawn.get_xdata()) == pytest.approx(finding.metadata["grid"])
+    assert list(drawn.get_ydata()) == pytest.approx(finding.metadata["partial_dependence"])
+    # One overlay per broken step, marked, not merely coloured.
+    assert len(ax.lines) == 1 + finding.metadata["n_breaks"]
+    assert all(line.get_marker() == "X" for line in ax.lines[1:])
+
+
+def test_a_compliant_monotonicity_curve_is_not_drawn(actuarial_context):
+    """A straight line the detail string already describes is decoration."""
+    from bdp_model_gate.structured.actuarial_checks import MonotonicityCheck
+
+    check = MonotonicityCheck(ActuarialConfig(monotonic_features={"prior_claims": "decreasing"}))
+    results = check.run(actuarial_context)
+    assert results[0].flag == "OK"
+    assert check.plot(actuarial_context, results) is None
+
+
+def test_the_dislocation_histogram_marks_the_reported_threshold(actuarial_context):
+    from bdp_model_gate.structured.actuarial_checks import DislocationCheck
+
+    check = DislocationCheck()
+    results = check.run(actuarial_context)
+    ax = check.plot(actuarial_context, results)
+
+    drawn = {round(float(line.get_xdata()[0]), 6) for line in ax.lines}
+    threshold = results[0].metadata["dislocation_threshold"]
+    assert {0.0, threshold, -threshold} <= drawn
+
+
+def test_the_actuarial_plots_decline_without_their_inputs():
+    """No baseline, no declared constraint, no realised outcome: nothing to
+    draw, and an empty frame is worse than no frame."""
+    from bdp_model_gate.structured.actuarial_checks import (
+        ActualVsExpectedCheck,
+        DislocationCheck,
+        MonotonicityCheck,
+        RiskDiscriminationCheck,
+    )
+
+    X = pd.DataFrame({"a": np.linspace(1, 100, 60)})
+    context = StructuredGateContext(
+        model=None,
+        X=X,
+        y_true=None,
+        y_pred=np.linspace(1, 60, 60),
+        predict_fn=lambda frame: np.zeros(len(frame)),
+        task="regression",
+    )
+    assert ActualVsExpectedCheck().plot(context) is None
+    assert RiskDiscriminationCheck().plot(context) is None
+    assert MonotonicityCheck().plot(context) is None
+    assert DislocationCheck().plot(context) is None

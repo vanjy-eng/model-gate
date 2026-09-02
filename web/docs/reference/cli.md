@@ -57,9 +57,33 @@ def load_scorer():
 | `--protected PATH` | CSV of protected attributes, row-aligned |
 | `--train-data PATH` | CSV of the **training** features — unlocks split-overlap and drift |
 | `--expected-loss-col NAME` | column holding per-row expected loss |
+| `--exposure-col NAME` | column holding per-row exposure — weights the regression metrics and the pricing checks |
+| `--baseline-col NAME` | column holding the incumbent model's prediction — unlocks the dislocation check |
 | `--latencies PATH` | one latency in ms per line |
 | `--cost-per-inference FLOAT` | |
 | `--model-card PATH` | JSON model card |
+
+The three column flags name columns of `--data` that are **not** features, and
+each is read out and then dropped from `X`. Leaving last quarter's premium in
+the feature frame would hand the model its own answer, which is the leak
+`target_leakage` exists to find.
+
+`--exposure-col` belongs on a target expressed as a *rate* — claims per
+vehicle-year, loss cost per sum-insured-year. Leave it off when the target is
+a per-policy total, where the exposure is already inside the value. See
+[Insurance pricing](../tasks/insurance.md).
+
+```bash
+bdp-model-gate \
+  --model premium_v4.joblib \
+  --data motor_holdout.csv \
+  --target-col realised_loss \
+  --exposure-col earned_vehicle_years \
+  --baseline-col premium_v3 \
+  --expected-loss-col technical_premium \
+  --task regression --metric lorenz_gini --min-score 0.15 \
+  --config pricing_gate.yaml
+```
 
 `--train-data` reads columns and distributions only, never labels: the target
 column is dropped if present, and the two frames need no row alignment. Give

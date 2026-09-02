@@ -102,6 +102,7 @@ nav:
       - Fairness — three families: tasks/fairness.md
       - Multiclass and ordinal: tasks/multiclass.md
       - Regression: tasks/regression.md
+      - Insurance pricing: tasks/insurance.md
   - Any model: models.md
   - Reference:
       - The checks: reference/checks.md
@@ -119,3 +120,4 @@ nav:
       - 04 PyTorch and friends: examples/04_any_framework_classification.ipynb
       - 05 Boosters and the CLI: examples/05_boosters_and_cli.ipynb
       - 06 Reports and plots: examples/06_reports_and_plots.ipynb
+      - 07 Insurance pricing: examples/07_insurance_pricing_end_to_end.ipynb

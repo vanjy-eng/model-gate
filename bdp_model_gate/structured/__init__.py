@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from ..config import GateConfig
+from .actuarial_checks import (
+    ActualVsExpectedCheck,
+    DislocationCheck,
+    MonotonicityCheck,
+    RiskDiscriminationCheck,
+)
 from .calibration_checks import (
     CalibrationCheck,
     EqualisedOddsCheck,
@@ -70,7 +76,14 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         LossRatioParityCheck(config.fairness),
         PerformanceThresholdCheck(config.performance),
         CalibrationCheck(config.performance),
+        # The pricing measures. Level, shape and ordering are three
+        # independent ways for a premium model to be wrong, and an error
+        # metric collapses all three into one number that hides each.
+        ActualVsExpectedCheck(config.actuarial),
+        RiskDiscriminationCheck(config.actuarial),
         ComplianceMappingCheck(config.compliance),
+        MonotonicityCheck(config.actuarial),
+        DislocationCheck(config.actuarial),
         AdversarialRobustnessCheck(config.security),
         PIILeakageCheck(config.security),
         PromptInjectionCheck(config.security),
@@ -83,6 +96,10 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
 
 
 __all__ = [
+    "ActualVsExpectedCheck",
+    "DislocationCheck",
+    "MonotonicityCheck",
+    "RiskDiscriminationCheck",
     "FeatureContractCheck",
     "FeatureDriftCheck",
     "LeakageCheck",

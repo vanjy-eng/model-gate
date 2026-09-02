@@ -28,12 +28,13 @@ sign it off.
   read the report
 - **[Concepts](concepts.md)** — contexts, checks, verdicts, and the
   degradation contract
-- **[Tasks](tasks/binary.md)** — binary, multiclass and ordinal, regression
+- **[Tasks](tasks/binary.md)** — binary, multiclass and ordinal, regression,
+  insurance pricing
 - **[Any model](models.md)** — scikit-learn, PyTorch, XGBoost, remote endpoints
 - **[Reference](reference/checks.md)** — the checks, configuration, CLI, API
 - **[Reports and plots](reference/reports.md)** — the page a reviewer signs,
-  and the nine charts in it
-- **[Examples](examples/index.md)** — six runnable notebooks
+  and the thirteen charts in it
+- **[Examples](examples/index.md)** — seven runnable notebooks
 
 </div>
 
@@ -44,8 +45,8 @@ sign it off.
 | Validation | Yes | target leakage, split overlap, validation strategy, feature contract, feature drift (review) |
 | Fairness | No → review | proxy correlation, demographic parity, SHAP subgroup gaps, counterfactual flip, equalised odds, subgroup calibration |
 | Fairness (regression) | No → review | loss-ratio parity, group mean gap, error parity, calibration parity |
-| Performance | Yes | model score, calibration, p95 latency, cost per inference |
-| Compliance | Yes | model-card completeness, DPIA trigger, explainability requirement |
+| Performance | Yes | model score, calibration, p95 latency, cost per inference, actual-vs-expected, risk discrimination |
+| Compliance | Yes | model-card completeness, DPIA trigger, explainability requirement, monotonicity, prediction dislocation (review) |
 | Security | Yes | adversarial robustness, PII leakage, prompt injection |
 
 Validation comes first on purpose. A performance finding says the model is not
@@ -57,6 +58,13 @@ to report a superb score and a clean `PASS`. See
 Fairness is deliberately non-blocking. Those findings frequently need human
 judgement, so they route to a reviewer rather than failing a build — which is
 the distinction most CI gates collapse.
+
+The last four in the performance and compliance rows are **pricing** measures,
+and they are why the suite is worth pointing at a rate filing rather than a
+generic regression report. An RMSE cannot say whether a book is under-priced,
+whether the shortfall sits in one decile, whether the rating structure orders
+risk at all, whether premium still rises with prior claims, or who gets a 30%
+increase. See [Insurance pricing](tasks/insurance.md).
 
 The fairness checks cover all three families — independence, separation and
 sufficiency — which cannot all hold at once whenever base rates differ between

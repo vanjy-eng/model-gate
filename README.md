@@ -107,6 +107,25 @@ the model is not good enough; a validation finding says you do not yet know
 whether it is, which is a prior question — so these block, and lead the
 report.
 
+**Actuarial — pricing** (blocking, except dislocation)
+- `ActualVsExpectedCheck` — did the book collect what it needed to? The level,
+  and then the same ratio band by band, because an overall A/E of 1.00 is
+  routinely produced by a model subsidising its worst risks out of its best
+- `RiskDiscriminationCheck` — the exposure-weighted **Lorenz Gini**: does the
+  rating structure order risk at all? A negative value means the ordering is
+  *inverted*, which no error metric shows
+- `MonotonicityCheck` — does premium still rise with prior claims? The filed
+  constraint, checked empirically by partial dependence. A declared factor that
+  cannot be evaluated blocks rather than skipping
+- `DislocationCheck` — replacing an incumbent, how much of the book moves by
+  more than a quarter, and which group carries it? **Non-blocking**: a
+  dislocated book may be entirely correct, and that is a judgement
+
+These are what `context.exposure` exists for. On a rate target an unweighted
+metric answers a different question: a policy written for one month and one
+written for twelve are not equal evidence about a claims rate, and an
+unweighted RMSE says they are.
+
 **Fairness** (non-blocking by default — routes to `NEEDS_REVIEW`, since some
 flags need human judgment)
 - `ProxyCorrelationCheck` — input features that correlate with a protected attribute
@@ -334,7 +353,7 @@ Charts are inlined as SVG rather than `<img src="data:...">`, so they inherit
 the page's CSS — one render reads correctly in light and dark — and stay
 sharp on paper.
 
-### Nine checks draw; seven deliberately do not
+### Thirteen checks draw; twelve deliberately do not
 
 A check draws only where it **collapses a distribution to a scalar and the
 shape is what you need to judge**. Latency, cost and model-card completeness
@@ -352,6 +371,10 @@ detail line already carries — charting those would be decoration.
 | Loss-ratio scatter | `loss_ratio_parity` | whether the margin gap is flat or grows with the risk |
 | Ordinal confusion | `performance_thresholds` | the direction of the error, which `quadratic_kappa` hides |
 | Robustness sweep | `adversarial_robustness` | a cliff versus a slope |
+| A/E by band | `actual_vs_expected` | one bad decile versus a tilt across all of them |
+| Lorenz curve | `risk_discrimination` | how much of the attainable discrimination was captured |
+| Partial dependence | `monotonicity` | whether the curve dips once or sags through the middle |
+| Change histogram | `prediction_dislocation` | a bump past the threshold versus a long tail |
 
 The robustness sweep is opt-in — `AdversarialRobustnessCheck(plot_sweep=True)`
 — because each point re-scores the sample, which is a real bill against a
@@ -639,6 +662,10 @@ works across scales, and groups smaller than `FairnessConfig.min_group_size`
 (default 30) are reported but not scored — a three-policy segment otherwise
 produces a wild ratio that reads as a finding.
 
+All four are also **exposure-weighted** when `context.exposure` is supplied,
+and each detail string says whether it was. `min_group_size` still counts
+*rows*: three policies are three policies however long they ran.
+
 Adversarial robustness also changes shape: a "prediction flip" is
 meaningless for a continuous output (every perturbation moves it), so
 regression measures the mean relative prediction shift against
@@ -650,7 +677,9 @@ From the CLI:
 bdp-model-gate --model pricing.joblib --data validation.csv \
   --target-col realised_loss --task regression \
   --expected-loss-col technical_premium \
-  --metric rmse --max-error 5000 --output gate_report.json
+  --exposure-col earned_vehicle_years \
+  --baseline-col premium_v3 \
+  --metric lorenz_gini --min-score 0.15 --output gate_report.json
 ```
 
 ## Roadmap
@@ -659,7 +688,6 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.5.3** | Exposure weighting, actual-vs-expected, monotonicity and dislocation — the actuarial measures. |
 | **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
 | **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |
 | **1.0.0** | A public, subclassable `ModelAdapter`. |
@@ -689,7 +717,7 @@ shapes most of the conventions, and `CONTRIBUTING.md` explains them.
 
 ## Examples
 
-Six runnable notebooks live in [`examples/`](examples/), committed with
+Seven runnable notebooks live in [`examples/`](examples/), committed with
 outputs so they read without being run:
 
 | Notebook | Covers |
@@ -699,6 +727,7 @@ outputs so they read without being run:
 | [03 regression](examples/03_regression_sklearn.ipynb) | motor premium, claims severity and frequency |
 | [04 PyTorch and friends](examples/04_any_framework_classification.ipynb) | `predict_fn`, `gradient_fn`, remote endpoints |
 | [05 boosters and the CLI](examples/05_boosters_and_cli.ipynb) | XGBoost `Booster`, `--model-loader` |
-| [06 reports and plots](examples/06_reports_and_plots.ipynb) | the nine charts, and the HTML report |
+| [06 reports and plots](examples/06_reports_and_plots.ipynb) | the thirteen charts, and the HTML report |
+| [07 insurance pricing](examples/07_insurance_pricing_end_to_end.ipynb) | exposure, A/E, the Gini, monotonicity and dislocation on one motor book |
 
 See [`CHANGELOG.md`](https://github.com/vanjy-eng/model-gate/blob/main/CHANGELOG.md) for release history.
