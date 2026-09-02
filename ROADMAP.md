@@ -23,43 +23,12 @@ Every entry below ships as a complete slice, not just code:
 A release is not done when the code works. It is done when someone who has
 never seen it can find it, read why it exists, and run it.
 
-Current release: **0.5.2**. Next: **0.5.3**.
+Current release: **0.5.3**. Next: **0.5.4**.
 
 > **This file tracks what should happen.** What already happened lives in
 > [`CHANGELOG.md`](CHANGELOG.md), and shipped entries are removed from here
 > rather than marked done. The only release appearing in both is the one
 > currently being built.
-
----
-
-## 0.5.3 — Exposure and actuarial measures
-
-**Branch:** `feat/actuarial`
-
-The suite is aimed at pricing and claims but lacks the measures the domain
-actually uses.
-
-- **`context.exposure`** — insurance metrics must be exposure-weighted. An
-  unweighted RMSE treats a one-month policy like a twelve-month one. This is
-  closer to a bug in the regression suite than a missing feature.
-- **Actual-vs-expected by prediction band** — the standard pricing validation,
-  and more informative than RMSE.
-- **Gini / Somers' D**, the industry convention for pricing discrimination.
-- **`MonotonicityCheck`** — regulators frequently require premium to be
-  monotone in a rating factor; more claims must not mean cheaper. Checkable
-  empirically via partial dependence, and a violation is a compliance finding
-  rather than a performance one. No comparable tool does this.
-- **`context.baseline_pred`** and **dislocation analysis** — when a model
-  replaces an incumbent, the governance question is "how many policyholders
-  see a >25% increase?". A baseline also enables report diffing across
-  releases: *did fairness regress since v3?*
-
-### Deliverables
-
-- Examples: a new `07_insurance_pricing_end_to_end.ipynb` carrying exposure,
-  A/E, monotonicity and dislocation on one book.
-- Web: new `docs/tasks/insurance.md`; update the landing page, since this is
-  the domain wedge.
 
 ---
 

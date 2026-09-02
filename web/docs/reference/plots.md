@@ -1,7 +1,7 @@
 # Plots
 
-We are not replacing your plotting library. Nine checks draw a chart, and each
-one exists because a scalar loses something a reviewer needs.
+We are not replacing your plotting library. Thirteen checks draw a chart, and
+each one exists because a scalar loses something a reviewer needs.
 
 ```bash
 pip install "bdp-model-gate[plots]"
@@ -57,8 +57,12 @@ matrix is four numbers the detail line already carries.
 | Loss-ratio scatter | `loss_ratio_parity` | whether the margin gap is flat or grows with the risk |
 | Ordinal confusion | `performance_thresholds` | `quadratic_kappa` hides *direction* |
 | Robustness sweep | `adversarial_robustness` | flat-then-collapse is a different risk from linear decay |
+| A/E by band | `actual_vs_expected` | one bad decile is a segment to recalibrate; a tilt across all of them is a rating structure that does not hold |
+| Lorenz curve | `risk_discrimination` | a Gini earned on one dreadful decile and one spread across the book are the same number |
+| Partial dependence | `monotonicity` | "not monotone" does not say whether the curve dips once or sags through the middle |
+| Change histogram | `prediction_dislocation` | a tight bump past the threshold is a rounding decision; a long tail is a conduct problem |
 
-Three deserve a longer note.
+Five deserve a longer note.
 
 ### The threshold sweep
 
@@ -73,6 +77,23 @@ point is a pass you should not bank on.
 A mean residual is one number for the whole book, and a book is not uniform. A
 group whose ratio sits at 1.0 across nine bands and 0.7 in the tenth has a
 segment problem, not a pricing problem, and only the banded view says so.
+
+### The Lorenz curve, against its ceiling
+
+The honest question about a Gini is not "is 0.28 good?" but "how much of what
+was available did the model capture?". No rating structure can predict which
+individual policy crashes, so the attainable maximum is well below 1.0 and
+varies by class of business. The chart draws the ceiling — the same curve
+sorted by the realised outcome — behind the model's own, which is what makes
+the shaded gap readable.
+
+### Partial dependence, with the breaks marked
+
+Drawn only when something broke. A compliant curve is a straight-ish line the
+detail string already describes in full, and charting it would be decoration.
+When a filed constraint *is* violated, the shape is the remedy: a single dip in
+a thin cell is a segment to refit, and a sag through the middle of the book is
+a structural problem.
 
 ### The robustness sweep — opt in
 
@@ -104,7 +125,12 @@ different rows than the verdict came from. Three things prevent it:
 - **Tests read the values back off the `Axes`** and assert them against
   `metadata` — bar heights against `group_tpr`, ray slopes against
   `group_loss_ratio`, the ECE rebuilt from the plotted points and their marker
-  areas.
+  areas, and the Gini re-integrated from the drawn Lorenz curve.
+
+Two of the actuarial plots take the strongest available form of this: the A/E
+bars and the monotonicity curve are read **straight out of `metadata`**, so
+the chart is the finding rather than a second computation of it. Where a
+finding is a small table, storing it and drawing from it beats recomputing.
 
 If you write your own `plot()`, hold it to the same standard: recompute from
 the check's own helper, or assert the drawn value against `metadata`.

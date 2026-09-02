@@ -12,7 +12,7 @@ web/
   build.sh             builds both into web/_site
 ```
 
-Documents **bdp-model-gate 0.5.2**. The site carries no version of its own:
+Documents **bdp-model-gate 0.5.3**. The site carries no version of its own:
 a second version number is a second thing to forget at release time, and it
 was already the stale one.
 

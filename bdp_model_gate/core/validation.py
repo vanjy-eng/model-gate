@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
+from .._logging import get_logger
 from ..classes import resolve_favourable, validate_class_order
 from ..exceptions import GateConfigurationError, GateValidationError
 from ..model import ModelAdapter
@@ -23,6 +24,8 @@ from ..task import REGRESSION, resolve_task, validate_task
 
 if TYPE_CHECKING:
     from .context import StructuredGateContext
+
+logger = get_logger("validation")
 
 
 def validate_structured_context(context: StructuredGateContext) -> None:
@@ -32,6 +35,8 @@ def validate_structured_context(context: StructuredGateContext) -> None:
     _validate_features(context)
     _validate_labels(context)
     _validate_expected_loss(context)
+    _validate_exposure(context)
+    _validate_baseline_pred(context)
     _validate_protected_df(context)
     _validate_model_card(context)
     _validate_performance_inputs(context)
@@ -152,6 +157,75 @@ def _validate_expected_loss(context: StructuredGateContext) -> None:
     if np.any(np.asarray(arr, dtype=float) < 0):
         raise GateValidationError(
             "context.expected_loss contains negative values — an expected loss cannot be below zero"
+        )
+
+
+def _validate_exposure(context: StructuredGateContext) -> None:
+    """Exposure is a weight, so the ways it can be wrong are specific.
+
+    A negative exposure is meaningless; an all-zero column would silently
+    turn every weighted mean into NaN, which would read in the report as
+    "could not be measured" rather than "you passed zeros"; and a NaN weight
+    poisons every total it enters. All three are refused here rather than
+    surfacing as an unexplained skip six checks later.
+    """
+    exposure = getattr(context, "exposure", None)
+    if exposure is None:
+        return
+    arr = np.asarray(exposure)
+    if arr.dtype.kind not in "iuf":
+        raise GateValidationError(f"context.exposure must be numeric, got dtype {arr.dtype}")
+    values = arr.astype(float)
+    if len(values) != len(context.X):
+        raise GateValidationError(
+            f"context.exposure has length {len(values)}, but context.X has "
+            f"{len(context.X)} rows — they must be row-aligned"
+        )
+    if not np.all(np.isfinite(values)):
+        raise GateValidationError(
+            "context.exposure contains NaN or infinite values — a weight that is not a "
+            "number propagates into every exposure-weighted total"
+        )
+    if np.any(values < 0):
+        raise GateValidationError(
+            "context.exposure contains negative values — exposure is a measure of time "
+            "or amount at risk and cannot be below zero"
+        )
+    if float(values.sum()) <= 0:
+        raise GateValidationError(
+            "every context.exposure value is zero, so nothing carries any weight — omit "
+            "exposure entirely if the target is a per-policy total rather than a rate"
+        )
+
+    task = resolve_task(context)
+    if task != REGRESSION:
+        logger.warning(
+            "context.exposure was supplied but the task resolved to %r. Exposure weighting "
+            "applies to the regression metrics and the actuarial checks; the "
+            "classification checks ignore it, and the report says so.",
+            task,
+        )
+
+
+def _validate_baseline_pred(context: StructuredGateContext) -> None:
+    baseline = getattr(context, "baseline_pred", None)
+    if baseline is None:
+        return
+    arr = np.asarray(baseline)
+    if arr.dtype.kind not in "iuf":
+        raise GateValidationError(
+            f"context.baseline_pred must be numeric, got dtype {arr.dtype} — it is the "
+            "incumbent model's prediction for the same rows"
+        )
+    if len(arr) != len(context.X):
+        raise GateValidationError(
+            f"context.baseline_pred has length {len(arr)}, but context.X has "
+            f"{len(context.X)} rows — they must be row-aligned"
+        )
+    if not np.all(np.isfinite(arr.astype(float))):
+        raise GateValidationError(
+            "context.baseline_pred contains NaN or infinite values, so the relative "
+            "change against it is undefined"
         )
 
 

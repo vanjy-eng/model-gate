@@ -45,6 +45,20 @@ class StructuredGateContext:
             expected cost — the actuarially meaningful fairness question for
             a pricing model, since risk-based premium differences are not by
             themselves discriminatory.
+        exposure: Per-row exposure — earned vehicle-years, sum-insured-years,
+            months on risk — row-aligned to X. Supply it when `y_true` and
+            `y_pred` are *rates*: a policy written for one month and one
+            written for twelve are not equal evidence about a claims rate,
+            and an unweighted RMSE says they are. Omit it when the target is
+            a per-policy total, where the exposure is already inside the
+            value. It weights the regression metrics, the four regression
+            fairness checks, and the whole actuarial suite; see
+            `bdp_model_gate.actuarial` for the convention.
+        baseline_pred: The incumbent's prediction for the same rows — the
+            model being replaced, or last quarter's version of this one.
+            Enables `DislocationCheck`, which answers the question a conduct
+            review actually asks: not "is the new model better?" but "how
+            many policyholders see a rise above 25%, and which ones?".
         predict_fn: `fn(DataFrame) -> array` returning point predictions.
             Takes precedence over `model`. The boundary is deliberately
             "DataFrame in, array out": your function owns tensor conversion,
@@ -101,6 +115,8 @@ class StructuredGateContext:
     model_card: dict | None = None
     generate_fn: Callable[[str], str] | None = None
     expected_loss: Sequence[float] | None = None
+    exposure: Sequence[float] | None = None
+    baseline_pred: Sequence[float] | None = None
     predict_fn: Callable[[pd.DataFrame], Any] | None = None
     predict_proba_fn: Callable[[pd.DataFrame], Any] | None = None
     gradient_fn: Callable[[pd.DataFrame], Any] | None = None

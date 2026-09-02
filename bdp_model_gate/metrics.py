@@ -23,6 +23,15 @@ Metrics differ in what they want from `y_pred`: ranking metrics like
 `roc_auc` need continuous scores, while `accuracy`/`f1`/`precision`/
 `recall` need hard class labels. `needs_hard_labels` records which, and
 the check binarizes at `PerformanceConfig.decision_threshold` when needed.
+
+They also differ in whether a per-row weight means anything to them.
+`context.exposure` is bound in as `sample_weight` for the regression
+family, where a twelve-month policy is twelve times the evidence about a
+rate that a one-month policy is; it is *not* applied to a class-label
+metric, and it is never applied to a callable of your own, whose signature
+this module does not know. Whether it was applied is recorded on the
+`ResolvedMetric` and printed in the check's detail, because "RMSE = 412"
+means two different things depending on the answer.
 """
 
 from __future__ import annotations
@@ -34,6 +43,7 @@ from typing import Any, Callable, Union  # Union: runtime alias, can't use PEP 6
 import numpy as np
 
 from ._logging import get_logger
+from .actuarial import lorenz_gini
 from .classes import to_ranks
 from .exceptions import GateConfigurationError
 from .task import BINARY, CLASSIFICATION_TASKS, MULTICLASS, REGRESSION
@@ -51,8 +61,12 @@ class MetricSpec:
     name: str
     sklearn_fn: str
     needs_hard_labels: bool
-    #: Pure-numpy equivalent, used only when scikit-learn isn't installed.
-    #: None means this metric genuinely requires scikit-learn.
+    #: Pure-numpy implementation. For a metric with a `sklearn_fn` this is a
+    #: *fallback*, used only when scikit-learn is absent. For one with an
+    #: empty `sklearn_fn` — rmse, mape, poisson_deviance, lorenz_gini —
+    #: scikit-learn has no equivalent and this is the only implementation
+    #: there is, which is why `used_fallback_impl` distinguishes the two.
+    #: None means the metric genuinely requires scikit-learn.
     fallback: MetricFn | None = None
     #: False for error metrics (RMSE, MAE, MAPE, deviance), where a *lower*
     #: value is better. These are gated with `max_error`, not `min_score`.
@@ -65,6 +79,12 @@ class MetricSpec:
     #: True for metrics defined only on an ordinal scale, which therefore
     #: require `context.class_order`.
     needs_class_order: bool = False
+    #: True for metrics that accept a per-row weight, which is how
+    #: `context.exposure` reaches them. Set on the regression metrics only:
+    #: exposure is a statement about how much of a period a row represents,
+    #: and that is a claim about a rate, not about a class label. A metric
+    #: without it is scored unweighted and the report says so.
+    supports_weight: bool = False
 
 
 def _accuracy_numpy(y_true: Any, y_pred: Any) -> float:
@@ -75,25 +95,49 @@ def _as_floats(y_true: Any, y_pred: Any) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(y_true, dtype=float), np.asarray(y_pred, dtype=float)
 
 
+def _mean(values: np.ndarray, sample_weight: Any = None) -> float:
+    """Mean, exposure-weighted when a weight is supplied.
+
+    Every numpy metric below routes its averaging through here, so the
+    weighted and unweighted forms cannot drift apart — on a weight of None
+    it is exactly `np.mean`.
+    """
+    if sample_weight is None:
+        return float(np.mean(values))
+    weights = np.asarray(sample_weight, dtype=float)
+    total = float(weights.sum())
+    if total <= 0:
+        raise GateConfigurationError(
+            "the rows this metric could score carry no exposure between them, so there "
+            "is no weighted average to take"
+        )
+    return float(np.dot(values, weights) / total)
+
+
 # The regression metrics are short enough to implement directly, which keeps
 # them available on a core install and sidesteps scikit-learn's churn around
 # `mean_squared_error(squared=False)` / `root_mean_squared_error`.
 
 
-def _rmse_numpy(y_true: Any, y_pred: Any) -> float:
+def _rmse_numpy(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
     t, p = _as_floats(y_true, y_pred)
-    return float(np.sqrt(np.mean((t - p) ** 2)))
+    return float(np.sqrt(_mean((t - p) ** 2, sample_weight)))
 
 
-def _mae_numpy(y_true: Any, y_pred: Any) -> float:
+def _mae_numpy(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
     t, p = _as_floats(y_true, y_pred)
-    return float(np.mean(np.abs(t - p)))
+    return _mean(np.abs(t - p), sample_weight)
 
 
-def _r2_numpy(y_true: Any, y_pred: Any) -> float:
+def _r2_numpy(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
     t, p = _as_floats(y_true, y_pred)
-    ss_res = float(np.sum((t - p) ** 2))
-    ss_tot = float(np.sum((t - np.mean(t)) ** 2))
+    w = np.ones_like(t) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    # Both sums carry the same weights, and the baseline is the *weighted*
+    # mean: comparing a weighted residual against an unweighted baseline
+    # would make r2 depend on the exposure profile of the book rather than
+    # on the model.
+    ss_res = float(np.dot(w, (t - p) ** 2))
+    ss_tot = float(np.dot(w, (t - _mean(t, sample_weight)) ** 2))
     if ss_tot == 0.0:
         # A constant target has no variance to explain. Perfect prediction is
         # 1.0; anything else is undefined rather than arbitrarily bad.
@@ -101,7 +145,7 @@ def _r2_numpy(y_true: Any, y_pred: Any) -> float:
     return 1.0 - ss_res / ss_tot
 
 
-def _mape_numpy(y_true: Any, y_pred: Any) -> float:
+def _mape_numpy(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
     """Mean absolute percentage error, skipping zero actuals.
 
     MAPE is the natural metric for skewed money targets like claims severity,
@@ -122,7 +166,8 @@ def _mape_numpy(y_true: Any, y_pred: Any) -> float:
             "every y_true value is zero, so MAPE is undefined for this dataset — "
             "use 'mae', 'rmse' or 'poisson_deviance' instead"
         )
-    return float(np.mean(np.abs((t[nonzero] - p[nonzero]) / t[nonzero])))
+    weights = None if sample_weight is None else np.asarray(sample_weight, dtype=float)[nonzero]
+    return _mean(np.abs((t[nonzero] - p[nonzero]) / t[nonzero]), weights)
 
 
 def ordinal_mae(y_true: Any, y_pred: Any, class_order: Any) -> float:
@@ -168,7 +213,7 @@ def quadratic_kappa(y_true: Any, y_pred: Any, class_order: Any) -> float:
     return 1.0 - float(np.sum(weights * observed)) / denominator
 
 
-def _poisson_deviance_numpy(y_true: Any, y_pred: Any) -> float:
+def _poisson_deviance_numpy(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
     """Mean Poisson deviance — the right error measure for count targets such
     as claims frequency, where RMSE understates the cost of over-dispersion."""
     t, p = _as_floats(y_true, y_pred)
@@ -183,7 +228,18 @@ def _poisson_deviance_numpy(y_true: Any, y_pred: Any) -> float:
     # (mu - x) term. np.where alone would still evaluate log(0), hence the mask.
     safe_t = np.where(t > 0, t, 1.0)
     term = np.where(t > 0, t * np.log(safe_t / p), 0.0)
-    return float(np.mean(2.0 * (term - (t - p))))
+    return _mean(2.0 * (term - (t - p)), sample_weight)
+
+
+def _lorenz_gini_metric(y_true: Any, y_pred: Any, sample_weight: Any = None) -> float:
+    """The Lorenz Gini index, as a gateable metric.
+
+    A thin adapter onto `bdp_model_gate.actuarial.lorenz_gini` so the number
+    the performance gate scores and the number `ActualVsExpectedCheck`
+    reports come from one implementation. Two would eventually disagree, and
+    a report carrying two different Ginis is worse than one carrying none.
+    """
+    return lorenz_gini(y_true, y_pred, exposure=sample_weight)
 
 
 BUILTIN_METRICS: dict[str, MetricSpec] = {
@@ -231,6 +287,7 @@ BUILTIN_METRICS: dict[str, MetricSpec] = {
         fallback=_rmse_numpy,
         greater_is_better=False,
         tasks=(REGRESSION,),
+        supports_weight=True,
     ),
     "mae": MetricSpec(
         "mae",
@@ -239,6 +296,7 @@ BUILTIN_METRICS: dict[str, MetricSpec] = {
         fallback=_mae_numpy,
         greater_is_better=False,
         tasks=(REGRESSION,),
+        supports_weight=True,
     ),
     "mape": MetricSpec(
         "mape",
@@ -247,6 +305,7 @@ BUILTIN_METRICS: dict[str, MetricSpec] = {
         fallback=_mape_numpy,
         greater_is_better=False,
         tasks=(REGRESSION,),
+        supports_weight=True,
     ),
     "poisson_deviance": MetricSpec(
         "poisson_deviance",
@@ -255,6 +314,7 @@ BUILTIN_METRICS: dict[str, MetricSpec] = {
         fallback=_poisson_deviance_numpy,
         greater_is_better=False,
         tasks=(REGRESSION,),
+        supports_weight=True,
     ),
     "r2": MetricSpec(
         "r2",
@@ -263,6 +323,19 @@ BUILTIN_METRICS: dict[str, MetricSpec] = {
         fallback=_r2_numpy,
         greater_is_better=True,
         tasks=(REGRESSION,),
+        supports_weight=True,
+    ),
+    # The pricing convention for discrimination. Numpy-native and never
+    # taken from scikit-learn, which has no equivalent: `gini` there is a
+    # tree-splitting impurity, an unrelated quantity with the same name.
+    "lorenz_gini": MetricSpec(
+        "lorenz_gini",
+        "",
+        needs_hard_labels=False,
+        fallback=_lorenz_gini_metric,
+        greater_is_better=True,
+        tasks=(REGRESSION,),
+        supports_weight=True,
     ),
 }
 
@@ -299,8 +372,16 @@ class ResolvedMetric:
     #: surfaces this in its detail string so a reader of the report knows
     #: the score isn't the metric they'd expect by default.
     is_fallback: bool = False
-    #: Set when the metric ran without scikit-learn.
+    #: Set when scikit-learn *has* a form of this metric and it could not be
+    #: loaded, so the numpy implementation stood in. Not set for a metric
+    #: scikit-learn does not define at all: reporting "computed without
+    #: scikit-learn" beside an RMSE on a machine where scikit-learn is
+    #: installed is a false statement in a governance record.
     used_fallback_impl: bool = False
+    #: True when `context.exposure` was bound in as a per-row weight. Named
+    #: in the check's detail string either way, because "RMSE = 412" means
+    #: two different things depending on this flag.
+    exposure_weighted: bool = False
 
 
 def validate_metric(metric: MetricSetting, task: str | None = None) -> None:
@@ -348,29 +429,64 @@ def _load_sklearn_metric(spec: MetricSpec) -> Callable[..., float] | None:
     return getattr(sk_metrics, spec.sklearn_fn, None)
 
 
+def _weighted(fn: Callable[..., float], spec: MetricSpec, exposure: Any) -> tuple[Any, bool]:
+    """Binds `exposure` in as a per-row weight, where the metric takes one.
+
+    Returns the callable and whether the weight was actually applied. A
+    metric that cannot take a weight is left alone and the caller reports
+    that it was not weighted — silently dropping the exposure would put an
+    unweighted number in a report the reader believes is weighted, which is
+    the failure this library exists to avoid.
+    """
+    if exposure is None:
+        return fn, False
+    if not spec.supports_weight:
+        logger.warning(
+            "context.exposure was supplied but metric %r takes no per-row weight — "
+            "scoring it unweighted. The report says so; pick a regression metric if "
+            "you need the weighting.",
+            spec.name,
+        )
+        return fn, False
+    return functools.partial(fn, sample_weight=np.asarray(exposure, dtype=float)), True
+
+
 def resolve_metric(
     metric: MetricSetting,
     task: str = BINARY,
     average: str = "macro",
     class_order: Any = None,
+    exposure: Any = None,
 ) -> ResolvedMetric:
     """Turns a config value into a callable metric.
 
     Raises GateConfigurationError if an explicitly named metric can't be
     satisfied — the gate reports that as a blocking CHECK_ERROR rather than
     scoring the model with something the caller didn't ask for.
+
+    `exposure` is bound in as a per-row weight for the metrics that accept
+    one (the regression family). A custom callable never receives it: its
+    signature is unknown, and passing an unexpected keyword would turn a
+    working metric into a CHECK_ERROR.
     """
     validate_metric(metric, task)
 
     if callable(metric):
         name = getattr(metric, "__name__", None) or type(metric).__name__
+        if exposure is not None:
+            logger.warning(
+                "context.exposure was supplied but performance.metric is your own "
+                "callable %r, whose signature this library does not know — it is called "
+                "unweighted. Apply the weighting inside your function if you need it.",
+                name,
+            )
         # A custom callable's direction is unknowable, so it is treated as
         # greater-is-better and gated with min_score. Negate inside your own
         # function, or name a built-in error metric, if that is wrong.
         return ResolvedMetric(name=name, fn=metric, needs_hard_labels=False)
 
     if metric == AUTO:
-        return _resolve_auto(task)
+        return _resolve_auto(task, exposure)
 
     spec = BUILTIN_METRICS[metric]
 
@@ -396,18 +512,29 @@ def resolve_metric(
         # predicted "decline" counts as much as a common "accept".
         fn = functools.partial(fn, average=average)
     if fn is not None:
-        return ResolvedMetric(spec.name, fn, spec.needs_hard_labels, spec.greater_is_better)
-    if spec.fallback is not None:
-        logger.debug(
-            "scikit-learn not installed — scoring %r with the built-in numpy implementation",
-            spec.name,
-        )
+        weighted_fn, was_weighted = _weighted(fn, spec, exposure)
         return ResolvedMetric(
             spec.name,
-            spec.fallback,
+            weighted_fn,
             spec.needs_hard_labels,
             spec.greater_is_better,
-            used_fallback_impl=True,
+            exposure_weighted=was_weighted,
+        )
+    if spec.fallback is not None:
+        stood_in = bool(spec.sklearn_fn)
+        logger.debug(
+            "scoring %r with the built-in numpy implementation%s",
+            spec.name,
+            " because scikit-learn is not installed" if stood_in else " (its only one)",
+        )
+        weighted_fn, was_weighted = _weighted(spec.fallback, spec, exposure)
+        return ResolvedMetric(
+            spec.name,
+            weighted_fn,
+            spec.needs_hard_labels,
+            spec.greater_is_better,
+            used_fallback_impl=stood_in,
+            exposure_weighted=was_weighted,
         )
     raise GateConfigurationError(
         f"performance.metric={metric!r} requires scikit-learn — install it with "
@@ -416,7 +543,7 @@ def resolve_metric(
     )
 
 
-def _resolve_auto(task: str = BINARY) -> ResolvedMetric:
+def _resolve_auto(task: str = BINARY, exposure: Any = None) -> ResolvedMetric:
     preference = AUTO_PREFERENCE_BY_TASK.get(task)
     if not preference:
         raise GateConfigurationError(
@@ -427,30 +554,47 @@ def _resolve_auto(task: str = BINARY) -> ResolvedMetric:
         spec = BUILTIN_METRICS[name]
         fn = _load_sklearn_metric(spec)
         if fn is not None:
+            weighted_fn, was_weighted = _weighted(fn, spec, exposure)
             return ResolvedMetric(
                 spec.name,
-                fn,
+                weighted_fn,
                 spec.needs_hard_labels,
                 spec.greater_is_better,
                 is_fallback=position > 0,
+                exposure_weighted=was_weighted,
             )
         if spec.fallback is not None:
-            logger.warning(
-                "performance.metric='auto': %r is unavailable (scikit-learn not installed) — "
-                "scoring with %r instead. Set performance.metric explicitly to silence this, "
-                "and remember min_score is interpreted against %r, not %r.",
-                preferred,
-                spec.name,
-                spec.name,
-                preferred,
-            )
+            if spec.name == preferred:
+                # Same metric, different arithmetic. The old message here said
+                # "'r2' is unavailable — scoring with 'r2' instead ... min_score
+                # is interpreted against 'r2', not 'r2'", which is nonsense and
+                # the same false claim `used_fallback_impl` used to make.
+                logger.debug(
+                    "performance.metric='auto': scoring %r with the built-in numpy "
+                    "implementation (scikit-learn not installed). Same metric, same "
+                    "threshold.",
+                    spec.name,
+                )
+            else:
+                logger.warning(
+                    "performance.metric='auto': %r is unavailable (scikit-learn not "
+                    "installed) — scoring with %r instead. Set performance.metric "
+                    "explicitly to silence this, and remember min_score is interpreted "
+                    "against %r, not %r.",
+                    preferred,
+                    spec.name,
+                    spec.name,
+                    preferred,
+                )
+            weighted_fn, was_weighted = _weighted(spec.fallback, spec, exposure)
             return ResolvedMetric(
                 spec.name,
-                spec.fallback,
+                weighted_fn,
                 spec.needs_hard_labels,
                 spec.greater_is_better,
                 is_fallback=position > 0,
-                used_fallback_impl=True,
+                used_fallback_impl=bool(spec.sklearn_fn),
+                exposure_weighted=was_weighted,
             )
     raise GateConfigurationError(  # pragma: no cover — accuracy always has a numpy fallback
         f"no metric in the {task} preference order could be resolved"

@@ -1,6 +1,6 @@
 # Examples
 
-Six notebooks, each committed **with outputs** so they read on GitHub
+Seven notebooks, each committed **with outputs** so they read on GitHub
 without being run. None needs external data or credentials.
 
 | Notebook | Task | Domain | Model |
@@ -12,13 +12,19 @@ without being run. None needs external data or credentials.
 | [04 PyTorch and friends](04_any_framework_classification.ipynb) | binary | fraud | PyTorch, Keras-shaped, remote endpoint |
 | [05 boosters and the CLI](05_boosters_and_cli.ipynb) | binary | fraud | XGBoost `XGBClassifier` and `Booster` |
 | [06 reports and plots](06_reports_and_plots.ipynb) | all three | credit, pricing, underwriting | `LogisticRegression` and plain functions |
+| [07 insurance pricing](07_insurance_pricing_end_to_end.ipynb) | regression, exposure | motor tariff: A/E, Gini, monotonicity, dislocation | `GradientBoostingRegressor` + business rules |
 
 **Start with 01.** It covers the core machinery — contexts, checks, reports,
 verdicts, configuration, custom checks, plugins, validation and the CLI. The
 others assume it and focus on what their task or framework changes.
 
-**06 is the other half:** the nine charts, why each one is not a number, and
-the self-contained HTML report a reviewer signs.
+**06 is the other half:** the thirteen charts, why each one is not a number,
+and the self-contained HTML report a reviewer signs.
+
+**07 is the domain case.** The same machinery pointed at a rate filing:
+exposure weighting, actual-vs-expected by decile, the Lorenz Gini against its
+ceiling, a filed monotonicity constraint that the tariff breaks, and who gets
+an increase. Read it after 03.
 
 ## Running them
 
@@ -36,6 +42,7 @@ Notebooks 01–03 need nothing beyond that. The rest each need one more thing:
 | 04 | `pip install torch` | CPU wheel is enough |
 | 05 | `pip install xgboost` | on macOS also `brew install libomp`, which XGBoost requires on that platform |
 | 06 | `pip install "bdp-model-gate[plots]"` | matplotlib and seaborn |
+| 07 | `pip install "bdp-model-gate[plots]"` | matplotlib and seaborn |
 
 Notebook 01 draws its charts too, but degrades to a text-only report without
 the `[plots]` extra rather than failing.
@@ -63,8 +70,8 @@ that raised. Run it whenever the library's behaviour changes — a notebook
 committed with stale outputs is worse than no notebook, because the outputs
 look authoritative.
 
-The committed outputs were produced on Python 3.13. Notebook 03 was last
-executed against `bdp-model-gate` 0.5.2; notebooks 01 and 06 against 0.5.1
+The committed outputs were produced on Python 3.13. Notebook 07 was last
+executed against `bdp-model-gate` 0.5.3; notebook 03 against 0.5.2; notebooks 01 and 06 against 0.5.1
 with scikit-learn 1.9, matplotlib 3.11 and seaborn 0.13; notebooks 02, 04 and
 05 against 0.4.1 with scikit-learn 1.7, shap 0.49, torch 2.13 and xgboost 3.4. The split is honest
 rather than tidy: 04 and 05 need frameworks that are not installed in every

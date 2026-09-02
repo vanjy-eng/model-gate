@@ -239,6 +239,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exposure-col",
+        help=(
+            "Column in --data holding a per-row exposure — earned vehicle-years, "
+            "months on risk, sum-insured-years. Weights the regression metrics and the "
+            "actuarial checks, so a one-month policy stops counting as much as a "
+            "twelve-month one. Supply it when the target is a rate; leave it out when "
+            "the target is a per-policy total"
+        ),
+    )
+    parser.add_argument(
+        "--baseline-col",
+        help=(
+            "Column in --data holding the incumbent model's prediction for the same "
+            "rows. Enables the dislocation check: how much of the book moves by more "
+            "than the tolerance, and which group carries it"
+        ),
+    )
+    parser.add_argument(
         "--metric",
         choices=[AUTO, *sorted(BUILTIN_METRICS)],
         help=(
@@ -338,14 +356,21 @@ def main(argv=None) -> int:
         y_true = df[args.target_col].values
         drop_cols = [args.target_col]
 
-        expected_loss = None
-        if args.expected_loss_col:
-            if args.expected_loss_col not in df.columns:
-                raise BDPModelGateError(
-                    f"--expected-loss-col {args.expected_loss_col!r} is not a column in {args.data}"
-                )
-            expected_loss = df[args.expected_loss_col].to_numpy()
-            drop_cols.append(args.expected_loss_col)
+        # Every one of these is a column of --data that is *not* a feature, so
+        # each is read out and then dropped: leaving an exposure or a baseline
+        # premium in X would hand the model its own answer at scoring time,
+        # which is the leak `LeakageCheck` exists to find.
+        def _side_column(flag_name: str, column: str | None):
+            if not column:
+                return None
+            if column not in df.columns:
+                raise BDPModelGateError(f"--{flag_name} {column!r} is not a column in {args.data}")
+            drop_cols.append(column)
+            return df[column].to_numpy()
+
+        expected_loss = _side_column("expected-loss-col", args.expected_loss_col)
+        exposure = _side_column("exposure-col", args.exposure_col)
+        baseline_pred = _side_column("baseline-col", args.baseline_col)
 
         X = df.drop(columns=drop_cols)
         y_pred = _predict(model, X, args.task)
@@ -383,6 +408,8 @@ def main(argv=None) -> int:
             cost_per_inference=args.cost_per_inference,
             model_card=model_card,
             expected_loss=expected_loss,
+            exposure=exposure,
+            baseline_pred=baseline_pred,
             task=args.task,
             class_order=_split_labels(args.class_order),
             favourable_classes=_split_labels(args.favourable_classes),

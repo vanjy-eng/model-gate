@@ -484,7 +484,7 @@
     <a class="wordmark" href="#top">
       <span class="mark" aria-hidden="true"></span>
       BDP Model Gate
-      <span class="version">0.5.2</span>
+      <span class="version">0.5.3</span>
     </a>
     <nav>
       <a href="#start">Getting started</a>
@@ -506,6 +506,13 @@
       <strong>after training and before promotion</strong> — reduced to one
       status your pipeline can branch on. Built for decisions that answer to
       someone: credit scoring, underwriting, pricing and claims.
+    </p>
+    <p class="lede" style="margin-top:.7rem;">
+      Including the measures a pricing review actually uses:
+      <strong>exposure-weighted actual-versus-expected by decile</strong>, the
+      Lorenz Gini against the ceiling your book allows, filed monotonicity
+      constraints checked by partial dependence, and how much of the book moves
+      when a tariff replaces its incumbent.
     </p>
 
     <div class="cta-row">
@@ -556,8 +563,8 @@
       writes one self-contained file: the verdict in plain words, every finding with
       its evidence, and a chart beside each number whose <em>shape</em> is what has to
       be judged — a reliability curve, a threshold sweep showing whether the verdict
-      survives a different cutoff, a loss-ratio scatter showing whether a margin gap is
-      flat or grows with the risk.
+      survives a different cutoff, an actual-versus-expected curve showing whether the
+      book is short everywhere or only in its top decile.
     </p>
     <p class="prose" style="margin-top:.7rem;">
       No JavaScript, no stylesheet, no font, nothing fetched from anywhere. It opens
@@ -590,14 +597,14 @@
       </a>
       <a class="quad-card" href="docs/examples/">
         <h3>Examples</h3>
-        <p>Six runnable notebooks: binary, multiclass, regression, PyTorch, boosters, reports.</p>
+        <p>Seven runnable notebooks: binary, multiclass, regression, PyTorch, boosters, reports, insurance pricing.</p>
         <span class="go">Open the notebooks →</span>
       </a>
     </div>
   </section>
 
   <section class="wrap divider" id="checks">
-    <span class="eyebrow">Twenty-one checks, five categories</span>
+    <span class="eyebrow">Twenty-five checks, five categories</span>
     <h2 style="font-size:clamp(1.5rem,3vw,2rem);margin-top:.6rem;">What gets checked</h2>
     <p class="prose" style="margin-top:.9rem;">
       Optional inputs degrade rather than fail — omit protected attributes and
@@ -654,10 +661,23 @@
           <span class="tag blocking">Blocking</span>
         </div>
         <ul>
-          <li>Score on a metric you choose — twelve built in, or your own callable</li>
+          <li>Score on a metric you choose — thirteen built in, or your own callable</li>
           <li><code>calibration</code> — do the stated probabilities match reality?</li>
           <li>p95 latency against a benchmark run</li>
           <li>Cost per inference</li>
+        </ul>
+      </article>
+
+      <article class="check">
+        <div class="check-top">
+          <h3>Pricing</h3>
+          <span class="tag blocking">Blocking</span>
+        </div>
+        <ul>
+          <li><code>actual_vs_expected</code> — the rate level, then the same ratio decile by decile</li>
+          <li><code>risk_discrimination</code> — the Lorenz Gini, against the ceiling this book allows</li>
+          <li><code>monotonicity</code> — does premium still rise with prior claims?</li>
+          <li><code>prediction_dislocation</code> — who moves, and by how much</li>
         </ul>
       </article>
 
@@ -728,8 +748,8 @@
           </tr>
           <tr>
             <td><strong>Regression</strong><br><span class="cell-note">pricing, severity, frequency</span></td>
-            <td><code>rmse</code>, <code>mape</code>, <code>poisson_deviance</code>, <code>r2</code></td>
-            <td class="cell-note">Loss-ratio, mean gap, error parity, calibration</td>
+            <td><code>rmse</code>, <code>mape</code>, <code>poisson_deviance</code>, <code>lorenz_gini</code>, <code>r2</code></td>
+            <td class="cell-note">Loss-ratio, mean gap, error parity, calibration — all exposure-weighted</td>
           </tr>
         </tbody>
       </table>
@@ -773,8 +793,10 @@
 
 context = StructuredGateContext(
     model=pricing_model,
-    X=X_val, y_true=realised_loss, y_pred=quoted_premium,
+    X=X_val, y_true=loss_cost, y_pred=quoted_premium,
     protected_df=protected_val,
+    exposure=earned_vehicle_years,    <span class="c-com"># the target is a rate</span>
+    baseline_pred=premium_v3,         <span class="c-com"># what this replaces</span>
     expected_loss=technical_premium,  <span class="c-com"># margin parity</span>
     task=<span class="c-str">"regression"</span>,
 )
@@ -843,7 +865,7 @@ report.to_json(<span class="c-str">"gate_report.json"</span>)
       </div>
     </div>
     <div class="colophon">
-      <span>BDP Model Gate 0.5.2</span>
+      <span>BDP Model Gate 0.5.3</span>
       <span>Maintained by Vangelis Oden</span>
       <span>MIT</span>
     </div>

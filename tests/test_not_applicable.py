@@ -15,6 +15,11 @@ import pytest
 
 from bdp_model_gate import ModelGate, PerformanceConfig, StructuredGateContext
 from bdp_model_gate.structured import default_structured_checks
+from bdp_model_gate.structured.actuarial_checks import (
+    ActualVsExpectedCheck,
+    DislocationCheck,
+    MonotonicityCheck,
+)
 from bdp_model_gate.structured.compliance import ComplianceMappingCheck
 from bdp_model_gate.structured.fairness import (
     CounterfactualFlipCheck,
@@ -123,6 +128,41 @@ def test_error_and_calibration_skip_without_y_true(base, check):
     assert "y_true" in result.detail
 
 
+def test_dislocation_skips_without_a_baseline(base):
+    """The one input with no possible stand-in: dislocation is a change
+    *from* something, and the book mean is a different question."""
+    X, y = base
+    result = _only(DislocationCheck().run(_ctx(X, y.astype(float), task="regression")))
+    assert result.flag == "NOT_APPLICABLE"
+    assert "baseline_pred" in result.detail
+
+
+def test_monotonicity_skips_until_a_constraint_is_declared(base):
+    """Nothing to check is not the same as nothing wrong, and the reason has
+    to say which — the constraint is a claim about the product."""
+    X, y = base
+    result = _only(MonotonicityCheck().run(_ctx(X, y.astype(float), task="regression")))
+    assert result.flag == "NOT_APPLICABLE"
+    assert "monotonic_features" in result.detail
+
+
+def test_actual_vs_expected_skips_without_realised_outcomes(base):
+    X, _ = base
+    result = _only(
+        ActualVsExpectedCheck().run(
+            StructuredGateContext(
+                model=Simple(),
+                X=X,
+                y_true=None,
+                y_pred=X["x"].to_numpy(),
+                task="regression",
+            )
+        )
+    )
+    assert result.flag == "NOT_APPLICABLE"
+    assert "y_true" in result.detail
+
+
 def test_compliance_skips_without_a_model_card(base):
     X, y = base
     result = _only(ComplianceMappingCheck().run(_ctx(X, y, model_card=None)))
@@ -210,7 +250,20 @@ def test_pii_reports_ok_not_applicable_when_there_are_no_string_columns(base):
 @pytest.mark.parametrize(
     "task,expected_skips",
     [
-        ("binary", {"group_mean_gap", "error_parity", "calibration_parity", "loss_ratio_parity"}),
+        (
+            "binary",
+            {
+                "group_mean_gap",
+                "error_parity",
+                "calibration_parity",
+                "loss_ratio_parity",
+                # 0.5.3: A/E, the Gini and dislocation are all statements
+                # about a continuous amount, and mean nothing for a class.
+                "actual_vs_expected",
+                "risk_discrimination",
+                "prediction_dislocation",
+            },
+        ),
         ("regression", {"disparate_impact", "counterfactual_flip"}),
     ],
 )

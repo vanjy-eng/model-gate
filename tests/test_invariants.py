@@ -433,3 +433,125 @@ def test_renaming_a_feature_does_not_change_whether_it_leaks(frame):
     after = LeakageCheck().run(_context(renamed, y, None))
     assert [r.flag for r in before] == [r.flag for r in after]
     assert before[0].metadata["feature_power"] == after[0].metadata["feature_power"]
+
+
+# --- exposure and the actuarial measures (0.5.3) -----------------------------
+
+
+def _pricing(X, protected, y_pred, y_true, **kw):
+    return StructuredGateContext(
+        model=Linear({"income": 1.0}),
+        X=X,
+        y_true=y_true,
+        y_pred=y_pred,
+        protected_df=protected,
+        task="regression",
+        **kw,
+    )
+
+
+def test_a_uniform_exposure_column_is_a_no_op(frame):
+    """The single most important property of the exposure work: a book where
+    every policy ran the full year must get byte-identical numbers to a book
+    with no exposure column at all.
+
+    `weights_or_ones` is what guarantees it — the weighted path is the only
+    path — and this is what would catch a second, unweighted code path being
+    introduced later.
+    """
+    from bdp_model_gate.structured.actuarial_checks import (
+        ActualVsExpectedCheck,
+        RiskDiscriminationCheck,
+    )
+    from bdp_model_gate.structured.regression_fairness import (
+        CalibrationParityCheck,
+        ErrorParityCheck,
+        GroupMeanGapCheck,
+    )
+
+    X, y, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 0.95 + 500.0
+    without = _pricing(X, protected, y_pred, y_true)
+    uniform = _pricing(X, protected, y_pred, y_true, exposure=np.ones(len(X)) * 7.0)
+
+    for check in (
+        ActualVsExpectedCheck(),
+        RiskDiscriminationCheck(),
+        GroupMeanGapCheck(),
+        ErrorParityCheck(),
+        CalibrationParityCheck(),
+    ):
+        plain = check.run(without)
+        weighted = check.run(uniform)
+        assert [r.flag for r in plain] == [r.flag for r in weighted], check.name
+        for left, right in zip(plain, weighted):
+            for key, value in left.metadata.items():
+                if key in ("exposure_weighted", "bands"):
+                    continue  # the report says it was weighted; that is the point
+                assert right.metadata[key] == value, f"{check.name}.{key}"
+
+
+def test_the_exposure_weighted_metrics_reduce_to_the_unweighted_ones():
+    """Same property, one level down: `sample_weight` of a constant must not
+    move a metric. An off-by-one in the weighted denominator would show here
+    and nowhere else."""
+    from bdp_model_gate.metrics import resolve_metric
+
+    rng = np.random.default_rng(21)
+    y_true = rng.gamma(2.0, 300.0, 250)
+    y_pred = y_true * rng.uniform(0.7, 1.3, 250)
+
+    for name in ("rmse", "mae", "mape", "r2", "lorenz_gini"):
+        plain = resolve_metric(name, "regression").fn(y_true, y_pred)
+        weighted = resolve_metric(name, "regression", exposure=np.full(250, 4.0)).fn(y_true, y_pred)
+        assert weighted == pytest.approx(plain), name
+
+
+def test_rescaling_the_exposure_unit_does_not_change_a_verdict(frame):
+    """Exposure in months and the same exposure in years are the same book.
+    The weights are relative, so a verdict that moved on the unit is a bug."""
+    from bdp_model_gate.structured.actuarial_checks import ActualVsExpectedCheck
+
+    X, _, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 1.08
+    exposure = np.clip(X["tenure"].to_numpy() / 40.0, 0.05, 1.0)
+
+    years = ActualVsExpectedCheck().run(_pricing(X, protected, y_pred, y_true, exposure=exposure))
+    months = ActualVsExpectedCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=exposure * 12.0)
+    )
+    assert [r.flag for r in years] == [r.flag for r in months]
+    assert years[0].metadata["ae"] == pytest.approx(months[0].metadata["ae"])
+
+
+def test_the_actual_over_expected_verdict_does_not_depend_on_row_order(frame):
+    """A/E is a ratio of totals and the bands are content-derived, so sorting
+    the validation CSV must not move the finding."""
+    from bdp_model_gate.structured.actuarial_checks import ActualVsExpectedCheck
+
+    X, _, protected = frame
+    rng = np.random.default_rng(31)
+    order = rng.permutation(len(X))
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * rng.uniform(0.8, 1.3, len(X))
+    exposure = np.clip(X["tenure"].to_numpy() / 40.0, 0.05, 1.0)
+
+    straight = ActualVsExpectedCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=exposure)
+    )
+    shuffled = ActualVsExpectedCheck().run(
+        _pricing(
+            X.iloc[order].reset_index(drop=True),
+            protected.iloc[order].reset_index(drop=True),
+            y_pred[order],
+            y_true[order],
+            exposure=exposure[order],
+        )
+    )
+    assert [r.flag for r in straight] == [r.flag for r in shuffled]
+    assert straight[0].metadata["ae"] == pytest.approx(shuffled[0].metadata["ae"])
+    assert [b["ae"] for b in straight[1].metadata["bands"]] == pytest.approx(
+        [b["ae"] for b in shuffled[1].metadata["bands"]]
+    )

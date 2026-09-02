@@ -104,6 +104,51 @@ config.compliance.high_risk_use_cases += ["bnpl_limit_setting"]
 config.compliance.required_model_card_fields = ["lawful_basis", "retention_period"]
 ```
 
+## Actuarial
+
+The pricing measures — actual-vs-expected, the Gini, monotonicity and
+dislocation. See [Insurance pricing](../tasks/insurance.md) for what each one
+answers.
+
+| Field | Default | Notes |
+|---|---|---|
+| `n_bands` | `10` | A/E bands, cut at equal **exposure** rather than equal row counts |
+| `max_overall_ae_deviation` | `0.05` | how far the whole book's A/E may sit from 1.0 |
+| `max_band_ae_deviation` | `0.10` | ...and any one band. Looser: a decile is a smaller sample |
+| `min_band_rows` | `20` | a thinner band is reported, not scored |
+| `min_gini` | `0.0` | floor on the Lorenz Gini |
+| `monotonic_features` | `{}` | `{"prior_claims": "increasing"}` — nothing is checked until you declare it |
+| `monotonicity_tolerance` | `0.02` | a step against the direction, as a fraction of the curve's range |
+| `monotonicity_grid_points` | `10` | points on each partial-dependence curve |
+| `monotonicity_max_rows` | `200` | rows scored per grid point |
+| `dislocation_threshold` | `0.25` | a relative move at or beyond this is a dislocation |
+| `max_dislocated_share` | `0.10` | share of exposure allowed past it before asking for a human |
+
+Two of these defaults are choices worth understanding rather than tuning.
+
+`min_gini = 0.0` is not a quality target and is not meant to be read as one.
+There is no defensible universal figure — a motor book and a fire book
+discriminate to different degrees for reasons that have nothing to do with
+model quality — but a Gini at or below zero says the rating structure orders
+risk no better than chance, or backwards, and that is a finding on any book.
+Raise it to your own portfolio's benchmark if you have one.
+
+`monotonic_features` is empty because the constraint is a claim about your
+product and its regulator. A declared factor the check cannot evaluate — a
+misspelled column, a categorical one, one that is constant on the validation
+set — **blocks** rather than skipping, since a typo would otherwise produce a
+green gate on an unverified regulatory constraint.
+
+`monotonicity_grid_points * monotonicity_max_rows` is the number of extra
+predictions each declared factor costs. At the defaults that is 2,000 rows
+scored per factor.
+
+```python
+config.actuarial.monotonic_features = {"prior_claims": "increasing"}
+config.actuarial.max_overall_ae_deviation = 0.02  # tighter for a filed rate
+config.actuarial.dislocation_threshold = 0.15
+```
+
 ## Security
 
 | Field | Default | Notes |
@@ -133,6 +178,11 @@ performance:
   max_error: 45000.0
 fairness:
   loss_ratio_threshold: 0.08
+actuarial:
+  max_overall_ae_deviation: 0.02
+  monotonic_features:
+    prior_claims: increasing
+    deductible: decreasing
 security:
   adversarial_epsilon: 0.01
 ```

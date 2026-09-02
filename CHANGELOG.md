@@ -6,6 +6,161 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-02
+
+Exposure, and the measures a pricing review actually uses.
+
+The suite has been aimed at pricing and claims since 0.1.0 while lacking every
+measure the domain runs on. A pricing committee does not ask "what is the
+RMSE?" — it asks whether the book collected what it needed to, whether the
+shortfall is in one decile, whether the tariff orders risk at all, whether
+premium still rises with prior claims, and who gets a 30% increase. An RMSE
+answers none of those, and being symmetric about zero it cannot even
+distinguish a book that is right everywhere from one that over-charges half
+its policies and under-charges the rest.
+
+### Exposure was closer to a bug than a missing feature
+An insurance book is not one observation per row. **A policy written for one
+month and a policy written for twelve are not equal evidence about a claims
+rate, and an unweighted RMSE says they are.**
+
+- **`context.exposure`** — a per-row weight, reaching the regression metrics,
+  all four regression fairness checks, and the whole actuarial suite. On the
+  motor book in notebook 07 it moves RMSE from 129,697 to 95,188 and A/E from
+  1.021 to 1.092, in opposite directions and for the same reason. A report
+  quoting the unweighted figure would say that book is 2% out when it is 9%
+  out.
+- The convention is documented once and stated in every detail string:
+  `y_true` and `y_pred` must be on the same basis as each other, and
+  `exposure` is how much weight the row deserves. Supply it for a *rate*; omit
+  it for a per-policy total, where the exposure is already inside the value.
+- **`weights_or_ones` means there is one code path, not two.** A book with no
+  exposure column goes through the weighted arithmetic on a vector of ones, so
+  the weighted and unweighted forms cannot drift apart. `test_invariants.py`
+  asserts a uniform exposure column is a byte-identical no-op across five
+  checks — the property that would catch a second, unweighted path being
+  added later.
+- Where a metric **cannot** take a weight the report says so out loud —
+  `[NOT exposure-weighted — this metric takes no per-row weight]` — rather
+  than dropping the weighting silently. A callable of your own never receives
+  it: its signature is unknown, and an unexpected keyword would turn a working
+  metric into a `CHECK_ERROR`.
+
+### Added — four pricing checks
+- **`ActualVsExpectedCheck`** — two findings, because they have different
+  causes and different fixes. The **level** (`sum(actual) / sum(expected)`) is
+  the number a committee can act on immediately. The **shape** — the same
+  ratio within bands of the prediction — is what the level hides: an overall
+  A/E of exactly 1.00 is routinely produced by a model subsidising its worst
+  risks out of its best. Bands are cut at equal *exposure*, not equal row
+  counts; a band below `min_band_rows` is reported but not scored.
+
+  The shape can invert the remedy, which is the point. On notebook 07's book
+  the A/E climbs from 0.33 in the cheapest decile to 1.82 in the dearest, so
+  the nine-percent overall shortfall would be "fixed" by a nine-percent rate
+  rise that over-charges the seven deciles already over-priced.
+- **`RiskDiscriminationCheck`** — the exposure-weighted **Lorenz Gini**.
+  Calibration and discrimination are independent: a tariff charging every
+  policy the book average has a perfect A/E and distributes the money at
+  random, and on a book where four fifths of policies have no claim every
+  error metric scores it respectably. A **negative** Gini means the ordering
+  is *inverted* — a sign error in a rating factor — which is a finding rather
+  than a poor score, and which no error metric shows, since reversing an
+  ordering barely moves the average error.
+
+  Reported against the ceiling the book allows, computed as
+  `lorenz_gini(y_true, y_true)` — the same function called with the actuals as
+  the score, so there is no second implementation to disagree with the first.
+  "0.28 of a possible 0.52" is a judgement a reviewer can make; "0.28" is not.
+- **`MonotonicityCheck`** — filed rates carry structural claims, and a
+  gradient booster fitted on a thin cell will violate one while **nothing else
+  in a validation report notices**: the model scores well, the book prices
+  sensibly on average, and one segment is charged less for being worse risks.
+  Checked empirically by partial dependence, so there is no constraint on the
+  model class and it works against a remote endpoint through `predict_fn`.
+
+  A declared factor that could **not** be evaluated — misspelled, categorical,
+  constant on the validation set — reports `MONOTONICITY_UNCHECKABLE` and
+  blocks, and the message names the near miss. A typo in a rating-factor name
+  would otherwise produce a green gate on an unverified regulatory constraint,
+  which is exactly the failure this library exists to prevent.
+- **`DislocationCheck`** — the question a committee actually asks about a
+  replacement is not "is it more accurate?" but "how many policyholders see a
+  rise above 25%, and are they anyone in particular?". A tariff can be better
+  on every statistical measure and undeployable because of who it re-prices.
+  Reports the share of exposure moving in each direction, the 95th percentile,
+  the largest rise, and the rise share per protected group. **Non-blocking**,
+  deliberately: a dislocated book may be entirely correct, and no threshold
+  can settle whether this profile is acceptable.
+
+### Added — elsewhere
+- **`context.baseline_pred`** and **`--baseline-col`**; **`--exposure-col`**.
+  Both are columns of `--data` that are *not* features, so the CLI reads them
+  out and drops them: leaving last quarter's premium in `X` would hand the
+  model its own answer, which is the leak `target_leakage` exists to find.
+- **`lorenz_gini`** as a gateable metric (`performance.metric`), and
+  **`ActuarialConfig`** with eleven fields. `min_gini` defaults to **0.0** and
+  is not a quality target: there is no defensible universal figure, but a Gini
+  at or below zero says the rating structure orders risk no better than
+  chance, or backwards, and that is a finding on any book.
+- **`bdp_model_gate.actuarial`** — `lorenz_gini`, `lorenz_curve`,
+  `actual_over_expected`, `partial_dependence`, `weighted_quantile`,
+  `band_edges`, `monotonicity_breaks`, `relative_change`. All numpy, so all of
+  it works on a core install.
+- **Four plots**, taking the strongest available form of the
+  "a chart may not contradict the number beside it" rule: the A/E bars and the
+  monotonicity curve are read **straight out of `metadata`**, so the chart is
+  the finding rather than a second computation of it. The Lorenz-curve test
+  re-integrates the Gini from the drawn line.
+- **`web/docs/tasks/insurance.md`**, and
+  **`examples/07_insurance_pricing_end_to_end.ipynb`** — one motor book,
+  gated end to end, where all four defects live in the business rules bolted
+  on top of a booster that was fine. The notebook's headline point:
+  **gate the scoring function, not the estimator.**
+
+### Fixed
+- **A false statement in the report.** `rmse`, `mape` and `poisson_deviance`
+  have no scikit-learn equivalent, so their numpy implementation is the only
+  implementation — but `resolve_metric` treated it as a *fallback* and every
+  report gating on RMSE printed `[computed without scikit-learn]` on machines
+  where scikit-learn was installed and working. `used_fallback_impl` now means
+  what it says: scikit-learn has a form of this metric and it could not be
+  loaded. Nothing about the score changes; the sentence beside it was wrong.
+- **The same false claim, in a log line.** `metric="auto"` on a regression task
+  resolves to `r2`, which scikit-learn *does* define — so on a core install the
+  numpy implementation stands in and the metric is unchanged. The warning read
+  `'r2' is unavailable — scoring with 'r2' instead ... min_score is interpreted
+  against 'r2', not 'r2'`. It is now a debug line saying what actually happened,
+  and a genuine substitution (`roc_auc` → `accuracy` on a binary task) still
+  warns.
+
+### Tie handling, because order-independence is a promise here
+The Lorenz curve aggregates rows sharing a predicted value into a single
+point, so the index cannot depend on the order rows happened to arrive in —
+the same guarantee `average_ranks` and `stable_sample` provide elsewhere. A
+naive cumulative sum would let sorting a CSV change whether a model ships.
+`partial_dependence` samples through `stable_sample` for the same reason, so a
+re-sorted validation set yields the same curve and the same verdict on a filed
+constraint.
+
+### Tests
+`tests/test_actuarial.py` — 68 tests, every asserted number derivable on paper
+from the fixture above it: the Gini of a correct ordering and its inverse are
+exactly +0.5 and −0.5; a book whose overall A/E is exactly 1.000 has bands at
+0.80 and 1.10; sixty of two hundred rising policies are 30% of rows and
+exactly 6/146 of exposure. Plus five new invariants, four plot-agreement
+tests, and every declared-but-uncheckable monotonicity path asserted on its
+reason string.
+
+### Changed
+- The default suite is **25 checks** across five categories, up from 21.
+  Thirteen draw a chart, up from nine.
+- The four regression fairness checks are exposure-weighted when exposure is
+  supplied, and each detail string says whether it was. `min_group_size` still
+  counts *rows*: three policies are three policies however long they ran.
+- `CalibrationParityCheck`'s A/E-by-band plot now cuts its bands on exposure
+  and weights its ratios, so it agrees with the scalar beside it.
+
 ## [0.5.2] - 2026-09-01
 
 Validation methodology — is the evidence behind the report sound?
@@ -803,7 +958,8 @@ in 0.4.0; example notebooks in 0.4.1.
 - `bdp-model-gate` CLI for CI/CD use.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
-[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/vanjy-eng/model-gate/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/vanjy-eng/model-gate/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/vanjy-eng/model-gate/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/vanjy-eng/model-gate/compare/v0.4.2...v0.5.0

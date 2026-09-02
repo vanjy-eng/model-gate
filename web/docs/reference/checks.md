@@ -1,8 +1,8 @@
 # The checks
 
-Twenty-one built-in checks across five categories. Each declares a
+Twenty-five built-in checks across five categories. Each declares a
 **category**, whether it is **blocking**, and which **tasks** it supports.
-Nine also draw a chart — see [Plots](plots.md).
+Thirteen also draw a chart — see [Plots](plots.md).
 
 ## Validation — blocking
 
@@ -166,6 +166,12 @@ See [Regression](../tasks/regression.md#why-loss-ratio-parity-is-the-one-that-ma
 for why the margin question is the one that separates discrimination from
 risk-based pricing.
 
+All four are **exposure-weighted** when `context.exposure` is supplied, and
+each detail string says whether it was. `min_group_size` still counts *rows*
+rather than exposure — it exists to stop a three-policy segment producing a
+ratio, and three policies are three policies however long they ran. See
+[Insurance pricing](../tasks/insurance.md).
+
 ## Performance — blocking
 
 `performance_thresholds` emits up to three results, each independent:
@@ -188,6 +194,56 @@ resolution and uncertainty.
 Independent of discrimination: a model can rank perfectly while every
 probability is twice too high. Blocking, but with a permissive default —
 see [Fairness: three families](../tasks/fairness.md#overall-calibration-calibration).
+
+### `actual_vs_expected`
+
+Regression only. The standard pricing validation, and two findings rather than
+one because they have different causes and different fixes.
+
+| Result | Flag | Reads |
+|---|---|---|
+| the **level** | `AE_LEVEL_RISK` | `sum(actual) / sum(expected)` over the whole book, against `max_overall_ae_deviation` |
+| the **shape** | `AE_BAND_RISK` | the same ratio within bands of the prediction, against `max_band_ae_deviation` |
+
+The level is the number a pricing committee can act on immediately: an A/E of
+1.10 says the book is under-priced by ten percent. An RMSE cannot express it
+at all, being symmetric about zero — a model that over-charges half the book
+and under-charges the other half scores exactly like one that is right
+everywhere.
+
+The shape is what that symmetry hides. **An overall A/E of exactly 1.00 is
+routinely produced by a model subsidising its worst risks out of its best**:
+the rate level looks perfect and every individual price is wrong. Bands are
+cut at equal **exposure**, not equal row counts, and a band holding fewer than
+`min_band_rows` rows is reported but not scored.
+
+### `risk_discrimination`
+
+Regression only. The exposure-weighted **Lorenz Gini**: does the rating
+structure order risk, and how much of what is available did it capture?
+
+Calibration and discrimination are independent. A model that charges every
+policy the book average is perfectly calibrated and useless — it collects the
+right total and distributes it at random — and on a skewed book the mean is
+not a bad guess, so every error metric scores it respectably.
+
+- **0** means the ordering carries nothing.
+- **Negative** means it is *inverted*: the policies priced highest carry the
+  lower loss per unit of exposure. That is a finding, not a poor score, and it
+  is what a sign error in a rating factor produces.
+- Flagged as `DISCRIMINATION_RISK` at or below `min_gini`, which defaults to
+  **0** — there is no defensible universal target, since a motor book and a
+  fire book discriminate to different degrees for reasons unrelated to model
+  quality.
+
+The ceiling is well below 1.0 and depends on the book, so the check reports the
+model against `lorenz_gini(y_true, y_true)` — the highest value this data
+allows. "0.28 of a possible 0.52" is a judgement a reviewer can make; "0.28"
+alone is not.
+
+Also available as a gateable metric: set `performance.metric = "lorenz_gini"`.
+For a **binary** target the Gini is exactly `2 · roc_auc − 1`, so use
+`roc_auc` there rather than a second name for the same quantity.
 
 ## Compliance — blocking
 
@@ -213,6 +269,75 @@ model_card = {
     "explainability_method": "SHAP, surfaced in the adverse-action notice",
 }
 ```
+
+### `monotonicity`
+
+Does the output move the way you told the regulator it moves?
+
+Filed rates carry structural claims — premium rises with prior claims, falls
+with a higher deductible, rises with sum insured. A gradient booster fitted on
+a thin cell will happily violate one, and **nothing else in a validation
+report would notice**: the model scores well, the book prices sensibly on
+average, and one segment of policyholders is charged *less* for being worse
+risks. That is a compliance exposure rather than a performance one.
+
+Checked empirically, by partial dependence — each declared factor is swept
+across the quantiles of its own distribution while every other column keeps
+its real joint distribution. No constraint on the model class, no assumption
+of linearity, and it works against a remote endpoint through `predict_fn`.
+
+```python
+from bdp_model_gate import ActuarialConfig, GateConfig
+
+config = GateConfig(
+    actuarial=ActuarialConfig(
+        monotonic_features={"prior_claims": "increasing", "deductible": "decreasing"}
+    )
+)
+```
+
+Nothing is checked until you declare something: `monotonic_features` is empty
+by default, because the constraint is a claim about *your* product and no
+library can guess which factors carry one or in which direction.
+
+!!! warning "A declared factor that cannot be tested blocks"
+    A misspelled column, a categorical one, or one that is constant on the
+    validation set reports `MONOTONICITY_UNCHECKABLE` and **blocks** rather
+    than being skipped quietly. A typo in a rating-factor name would otherwise
+    produce a green gate on an unverified regulatory constraint, which is the
+    exact confident-and-wrong outcome this library exists to prevent. The
+    message names the near miss.
+
+For a classifier the curve is drawn over **probabilities**: partial dependence
+of hard 0/1 labels is a staircase that can look monotone while the score
+underneath it is not, so a model exposing no `predict_proba` reports
+`NOT_APPLICABLE`.
+
+### `prediction_dislocation`
+
+Regression only, **non-blocking**, and needs `context.baseline_pred`.
+
+The question a pricing committee actually asks about a new model is not "is it
+more accurate?" — that is settled long before a gate. It is *"how many
+policyholders see a rise above 25%, and are they anyone in particular?"*. A
+model can be better on every statistical measure and still be undeployable
+because of who it re-prices.
+
+Reports the share of **exposure** moving by at least
+`dislocation_threshold` in each direction, the 95th percentile move, the
+largest rise, and — when `protected_df` is supplied — the rise share per
+protected group, naming the most affected. `DISLOCATION_RISK` when the rise
+share exceeds `max_dislocated_share`.
+
+Non-blocking deliberately: a dislocated book may be entirely correct — that is
+often the point of a re-rate — and no threshold can decide whether this
+particular profile is acceptable. The check's job is to put the number and the
+affected group in front of a person.
+
+Rows whose baseline is zero or negative are excluded and counted: a premium
+moving from 0 to 500 is not an increase of any percentage. Without a baseline
+the check reports `NOT_APPLICABLE` rather than treating the book mean as a
+stand-in, which would answer a different question.
 
 ## Security — blocking
 
@@ -274,3 +399,7 @@ looking for refusal. Without one it reports `NOT_APPLICABLE`.
 | `NOT_APPLICABLE` | skipped — treated as OK |
 | `CHECK_ERROR` | the check raised; always blocking |
 | risk string | check-specific; blocking per the check |
+
+One flag is worth calling out by name. `MONOTONICITY_UNCHECKABLE` is not a
+skip: it says a constraint you asserted has **not** been verified, and it
+blocks. Everything else that could not run reports `NOT_APPLICABLE`.

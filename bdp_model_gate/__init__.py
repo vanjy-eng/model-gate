@@ -26,6 +26,7 @@ Unstructured-data (text/image/audio) support is planned — see
 """
 
 from .config import (
+    ActuarialConfig,
     ComplianceConfig,
     FairnessConfig,
     GateConfig,
@@ -35,7 +36,7 @@ from .config import (
 from .core import BaseCheck, CheckResult, GateReport, ModelGate, StructuredGateContext
 from .task import ALL_TASKS, BINARY, MULTICLASS, REGRESSION
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 
 def run_structured_gate(model, X, y_true, y_pred, protected_df=None, **kwargs) -> GateReport:
@@ -63,6 +64,7 @@ __all__ = [
     "ModelGate",
     "StructuredGateContext",
     "GateConfig",
+    "ActuarialConfig",
     "FairnessConfig",
     "PerformanceConfig",
     "ComplianceConfig",

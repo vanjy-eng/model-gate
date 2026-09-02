@@ -11,6 +11,7 @@ context = StructuredGateContext(
     y_pred=quoted_premium,
     protected_df=protected_val,
     expected_loss=technical_premium,  # enables loss-ratio parity
+    exposure=earned_vehicle_years,  # weights every metric below — see Insurance pricing
     task="regression",
 )
 
@@ -31,9 +32,10 @@ This is the change that catches people out. Error metrics are
 | `mae` | lower better | `max_error` | robust to outliers |
 | `mape` | lower better | `max_error` | skewed money — claims severity |
 | `poisson_deviance` | lower better | `max_error` | counts — claims frequency |
+| `lorenz_gini` | higher better | `min_score` | pricing discrimination — see [Insurance pricing](insurance.md) |
 
-All five are implemented in numpy, so they work on a core install without
-scikit-learn.
+All six are implemented in numpy, so they work on a core install without
+scikit-learn, and all six accept `context.exposure` as a per-row weight.
 
 There is deliberately **no default `max_error`** — a sensible ceiling depends
 entirely on whether the target is naira or claim counts — so configuring an

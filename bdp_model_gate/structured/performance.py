@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .._logging import get_logger
+from ..actuarial import exposure_array
 from ..config import PerformanceConfig
 from ..core.base import BaseCheck, CheckResult
 from ..exceptions import GateConfigurationError
@@ -61,6 +62,7 @@ class PerformanceThresholdCheck(BaseCheck):
             task,
             average=self.config.average,
             class_order=getattr(self._context, "class_order", None),
+            exposure=exposure_array(self._context),
         )
         if not metric.needs_hard_labels:
             y_pred_eval = y_pred
@@ -101,6 +103,13 @@ class PerformanceThresholdCheck(BaseCheck):
             notes.append("fell back from the preferred metric — scikit-learn not installed")
         if metric.used_fallback_impl:
             notes.append("computed without scikit-learn")
+        # Said out loud rather than left in metadata: an exposure-weighted RMSE
+        # and an unweighted one are different numbers, and a reader comparing
+        # this report against last quarter's needs to know which they have.
+        if metric.exposure_weighted:
+            notes.append("exposure-weighted")
+        elif getattr(context, "exposure", None) is not None:
+            notes.append("NOT exposure-weighted — this metric takes no per-row weight")
         suffix = f" [{'; '.join(notes)}]" if notes else ""
 
         logger.debug(
@@ -126,6 +135,7 @@ class PerformanceThresholdCheck(BaseCheck):
                 "threshold_field": threshold_field,
                 "greater_is_better": metric.greater_is_better,
                 "metric_is_fallback": metric.is_fallback,
+                "exposure_weighted": metric.exposure_weighted,
             },
         )
 
