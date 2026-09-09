@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 from ._logging import get_logger
+from .exceptions import GateConfigurationError
 
 logger = get_logger("uncertainty")
 
@@ -130,11 +131,23 @@ def canonical_order(frame: pd.DataFrame) -> np.ndarray:
     holding the same rows in different orders produce resamples over the same
     canonical sequence, so the bootstrap distribution is identical.
 
-    Ties — genuinely duplicate rows — are harmless: they are interchangeable
-    by definition, so which of them a resample draws cannot change the
-    statistic.
+    Numeric columns are **rank-transformed** before hashing, and that is not a
+    detail. Hashing raw floats makes the ordering sensitive to arithmetic that
+    ought not to matter: `exposure` and `exposure * 12` are the same book, and
+    `x / mean(x)` against `12x / mean(12x)` differs in the last bits, so the
+    digests differ, so the resample sequence differs, so a verdict could move
+    on a change of *units*. Dense ranks are exactly invariant under any
+    positive monotone rescaling, which is the property the library's
+    scale-free claims already promise elsewhere.
+
+    Ties — genuinely duplicate rows — are harmless: interchangeable rows
+    cannot change the statistic whichever one a resample draws.
     """
-    digests = pd.util.hash_pandas_object(frame, index=False).to_numpy(dtype="uint64")
+    ranked = frame.copy()
+    for column in ranked.columns:
+        if ranked[column].dtype.kind in "iuf":
+            ranked[column] = ranked[column].rank(method="dense")
+    digests = pd.util.hash_pandas_object(ranked, index=False).to_numpy(dtype="uint64")
     return np.argsort(digests, kind="stable")
 
 
@@ -214,6 +227,95 @@ def bootstrap(
     )
 
 
+#: Which side of the threshold is the *bad* side.
+ABOVE = "above"  #: a gap, an error, a disparity — flag when it exceeds
+BELOW = "below"  #: a score floor such as `min_score` — flag when it falls short
+DIRECTIONS = (ABOVE, BELOW)
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """What a check should report, once the interval has been read."""
+
+    flag: str
+    blocking: bool
+    note: str
+    metadata: dict[str, Any]
+
+    @property
+    def uncertain(self) -> bool:
+        return self.flag == UNCERTAIN_FLAG
+
+
+class Uncertainty:
+    """Config plus the two operations a check needs, bound together.
+
+    Every check that compares a number to a threshold needs the same three
+    lines — build an interval, read it against the threshold, put the result in
+    the detail string and the metadata. Nine copies of that is nine chances to
+    get the three-way reading subtly different, so it lives here and each check
+    holds one of these.
+
+    Validation happens at construction, so a typo'd `on_uncertain` fails while
+    the suite is being built rather than partway through a run.
+    """
+
+    def __init__(self, config: Any = None):
+        from .config import UncertaintyConfig
+
+        self.config = config or UncertaintyConfig()
+        if self.config.on_uncertain not in ON_UNCERTAIN:
+            raise GateConfigurationError(
+                f"uncertainty.on_uncertain={self.config.on_uncertain!r} — must be one "
+                f"of {', '.join(ON_UNCERTAIN)}"
+            )
+
+    def interval(self, statistic: Callable[[np.ndarray], float], frame: pd.DataFrame):
+        """The bootstrap interval, or None when intervals are off or the data
+        cannot support one."""
+        if not self.config.compute_intervals:
+            return None
+        return bootstrap(
+            statistic,
+            frame,
+            samples=self.config.bootstrap_samples,
+            level=self.config.confidence_level,
+            random_state=self.config.random_state,
+            min_rows=self.config.min_rows_for_interval,
+        )
+
+    def verdict(
+        self,
+        interval: Interval | None,
+        threshold: float,
+        *,
+        point: float,
+        risk_flag: str,
+        blocking: bool = True,
+        flag_when: str = ABOVE,
+    ) -> Verdict:
+        """Read the interval against the threshold, and package the answer."""
+        flag, is_blocking, note = resolve(
+            interval,
+            threshold,
+            point=point,
+            risk_flag=risk_flag,
+            on_uncertain=self.config.on_uncertain,
+            blocking=blocking,
+            flag_when=flag_when,
+        )
+        metadata: dict[str, Any] = {"on_uncertain": self.config.on_uncertain}
+        if interval is not None:
+            metadata.update(interval.as_metadata())
+        return Verdict(flag=flag, blocking=is_blocking, note=note, metadata=metadata)
+
+    @staticmethod
+    def measured(interval: Interval | None, point: float) -> str:
+        """The number as it appears in a detail string, with its interval when
+        there is one and an explicit note when there is not."""
+        return interval.describe() if interval is not None else f"{point:.3f} (no interval)"
+
+
 def resolve(
     interval: Interval | None,
     threshold: float,
@@ -222,6 +324,7 @@ def resolve(
     risk_flag: str,
     on_uncertain: str = REVIEW,
     blocking: bool = True,
+    flag_when: str = ABOVE,
 ) -> tuple[str, bool, str]:
     """Turn an interval and a threshold into `(flag, blocking, note)`.
 
@@ -239,51 +342,74 @@ def resolve(
     when an interval exists, because the reader has to be able to tell a
     verdict backed by evidence from one the data cannot support.
     """
-    if interval is None:
-        flag = risk_flag if point > threshold else "OK"
-        return flag, blocking, ""
+    if flag_when not in DIRECTIONS:
+        raise GateConfigurationError(
+            f"flag_when must be one of {', '.join(DIRECTIONS)} — got {flag_when!r}"
+        )
+    breached = (point > threshold) if flag_when == ABOVE else (point < threshold)
 
-    if interval.exceeds(threshold):
+    if interval is None:
+        return (risk_flag if breached else "OK"), blocking, ""
+
+    if flag_when == ABOVE:
+        certainly_bad, certainly_fine = interval.low > threshold, interval.high < threshold
+        bad_side, good_side = "above", "below"
+    else:
+        certainly_bad, certainly_fine = interval.high < threshold, interval.low > threshold
+        bad_side, good_side = "below", "above"
+
+    if certainly_bad:
         return (
             risk_flag,
             blocking,
-            f" — the whole {interval.level:.0%} interval sits above {threshold:.3f}",
+            f" — the whole {interval.level:.0%} interval sits {bad_side} {threshold:.3f}",
         )
 
-    if not interval.straddles(threshold):
-        return "OK", blocking, f" — the whole interval sits below {threshold:.3f}"
+    if certainly_fine:
+        return "OK", blocking, f" — the whole interval sits {good_side} {threshold:.3f}"
 
     # Straddling. Which *direction* the doubt runs in matters to the reader:
     # "looks clean but could breach" and "looks bad but might not" are
     # different conversations, and a single "straddles the threshold" sentence
     # collapses them. What it means for the pipeline is the caller's policy,
     # not this function's.
-    if point <= threshold:
+    reach = interval.high if flag_when == ABOVE else interval.low
+    if not breached:
         straddle_note = (
-            f" — the estimate is under {threshold:.3f} but the interval reaches "
-            f"{interval.high:.3f}, so this sample cannot rule out a breach"
+            f" — the estimate stays the right side of {threshold:.3f} but the interval "
+            f"reaches {reach:.3f}, so this sample cannot rule out a breach"
         )
     else:
         straddle_note = (
-            f" — the estimate is over {threshold:.3f} but the interval reaches down "
-            f"to {interval.low:.3f}, so this sample cannot confirm a breach"
+            f" — the estimate breaches {threshold:.3f} but the interval reaches back to "
+            f"{(interval.low if flag_when == ABOVE else interval.high):.3f}, so this "
+            "sample cannot confirm a breach"
         )
+
     if on_uncertain == BLOCK:
         return risk_flag, blocking, straddle_note + " (on_uncertain='block')"
     if on_uncertain == POINT:
-        flag = risk_flag if point > threshold else "OK"
-        return flag, blocking, straddle_note + " (accepted: on_uncertain='point')"
+        return (
+            (risk_flag if breached else "OK"),
+            blocking,
+            straddle_note + " (accepted: on_uncertain='point')",
+        )
     return UNCERTAIN_FLAG, False, straddle_note
 
 
 __all__ = [
+    "ABOVE",
+    "BELOW",
     "BLOCK",
+    "DIRECTIONS",
     "MIN_ROWS_FOR_INTERVAL",
     "ON_UNCERTAIN",
     "UNCERTAIN_FLAG",
     "POINT",
     "REVIEW",
     "Interval",
+    "Uncertainty",
+    "Verdict",
     "bootstrap",
     "canonical_order",
     "resolve",

@@ -71,10 +71,10 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         # would make the choice silently.
         EqualisedOddsCheck(config.fairness),
         SubgroupCalibrationCheck(config.fairness),
-        GroupMeanGapCheck(config.fairness),
-        ErrorParityCheck(config.fairness),
-        CalibrationParityCheck(config.fairness),
-        LossRatioParityCheck(config.fairness),
+        GroupMeanGapCheck(config.fairness, config.uncertainty),
+        ErrorParityCheck(config.fairness, config.uncertainty),
+        CalibrationParityCheck(config.fairness, config.uncertainty),
+        LossRatioParityCheck(config.fairness, config.uncertainty),
         PerformanceThresholdCheck(config.performance),
         CalibrationCheck(config.performance),
         # The pricing measures. Level, shape and ordering are three

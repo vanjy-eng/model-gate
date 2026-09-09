@@ -555,3 +555,88 @@ def test_the_actual_over_expected_verdict_does_not_depend_on_row_order(frame):
     assert [b["ae"] for b in straight[1].metadata["bands"]] == pytest.approx(
         [b["ae"] for b in shuffled[1].metadata["bands"]]
     )
+
+
+# --- confidence intervals (0.6.0) --------------------------------------------
+
+
+def test_a_uniform_exposure_column_is_a_no_op_for_the_interval_too(frame):
+    """The 0.5.3 invariant, extended to the thing 0.6.0 added.
+
+    The bootstrap hashes the weight column to fix its canonical ordering, so a
+    raw exposure column would make "no exposure" and "exposure = 7.0
+    everywhere" resample in different orders and report different intervals.
+    Normalising the weights by their mean is what keeps both this and the
+    exposure-unit invariance below true.
+    """
+    from bdp_model_gate.structured.regression_fairness import GroupMeanGapCheck
+
+    X, _, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 0.95 + 500.0
+
+    plain = GroupMeanGapCheck().run(_pricing(X, protected, y_pred, y_true))[0]
+    uniform = GroupMeanGapCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=np.ones(len(X)) * 7.0)
+    )[0]
+
+    assert plain.flag == uniform.flag
+    assert plain.metadata["ci_low"] == pytest.approx(uniform.metadata["ci_low"])
+    assert plain.metadata["ci_high"] == pytest.approx(uniform.metadata["ci_high"])
+
+
+def test_rescaling_the_exposure_unit_does_not_move_the_interval(frame):
+    """Months and years are the same book, and the interval has to agree."""
+    from bdp_model_gate.structured.regression_fairness import GroupMeanGapCheck
+
+    X, _, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 1.08
+    exposure = np.clip(X["tenure"].to_numpy() / 40.0, 0.05, 1.0)
+
+    years = GroupMeanGapCheck().run(_pricing(X, protected, y_pred, y_true, exposure=exposure))[0]
+    months = GroupMeanGapCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=exposure * 12.0)
+    )[0]
+
+    assert years.flag == months.flag
+    assert years.metadata["ci_low"] == pytest.approx(months.metadata["ci_low"])
+    assert years.metadata["ci_high"] == pytest.approx(months.metadata["ci_high"])
+
+
+def test_row_order_does_not_move_any_interval(frame):
+    """The one property every interval in the suite rests on, asserted across
+    the checks rather than only through `disparate_impact`."""
+    from bdp_model_gate.structured.regression_fairness import (
+        CalibrationParityCheck,
+        ErrorParityCheck,
+        GroupMeanGapCheck,
+        LossRatioParityCheck,
+    )
+
+    X, _, protected = frame
+    rng = np.random.default_rng(23)
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * rng.uniform(0.85, 1.2, len(X))
+    expected_loss = np.clip(y_pred * 0.9, 1.0, None)
+    order = rng.permutation(len(X))
+
+    straight = _pricing(X, protected, y_pred, y_true, expected_loss=expected_loss)
+    shuffled = _pricing(
+        X.iloc[order].reset_index(drop=True),
+        protected.iloc[order].reset_index(drop=True),
+        y_pred[order],
+        y_true[order],
+        expected_loss=expected_loss[order],
+    )
+
+    for check in (
+        GroupMeanGapCheck(),
+        ErrorParityCheck(),
+        CalibrationParityCheck(),
+        LossRatioParityCheck(),
+    ):
+        before, after = check.run(straight)[0], check.run(shuffled)[0]
+        assert before.flag == after.flag, check.name
+        assert before.metadata["ci_low"] == pytest.approx(after.metadata["ci_low"]), check.name
+        assert before.metadata["ci_high"] == pytest.approx(after.metadata["ci_high"]), check.name

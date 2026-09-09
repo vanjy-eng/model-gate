@@ -25,11 +25,14 @@ from bdp_model_gate.exceptions import GateConfigurationError
 from bdp_model_gate.stats import selection_rate_difference
 from bdp_model_gate.structured.fairness import DisparateImpactCheck
 from bdp_model_gate.uncertainty import (
+    ABOVE,
+    BELOW,
     BLOCK,
     POINT,
     REVIEW,
     UNCERTAIN_FLAG,
     Interval,
+    Uncertainty,
     bootstrap,
     canonical_order,
     resolve,
@@ -325,6 +328,10 @@ def test_an_unknown_posture_fails_while_the_suite_is_being_built():
     typo'd metric name gets."""
     with pytest.raises(GateConfigurationError, match="on_uncertain"):
         DisparateImpactCheck(uncertainty=UncertaintyConfig(on_uncertain="ignore"))
+    # ...and the helper refuses on its own too, so a check that forgets to
+    # route through it cannot skip the validation.
+    with pytest.raises(GateConfigurationError, match="on_uncertain"):
+        Uncertainty(UncertaintyConfig(on_uncertain="whatever"))
 
 
 def test_the_default_suite_wires_the_uncertainty_config_through():
@@ -336,7 +343,7 @@ def test_the_default_suite_wires_the_uncertainty_config_through():
         for c in default_structured_checks(config, include_plugins=False)
         if c.name == "disparate_impact"
     )
-    assert parity.uncertainty.on_uncertain == BLOCK
+    assert parity.uncertainty.config.on_uncertain == BLOCK
 
 
 # --------------------------------------------------------------------------
@@ -361,3 +368,49 @@ def test_resolve_falls_back_to_the_point_estimate_without_an_interval():
             None, 0.10, point=point, risk_flag="DISPARITY_RISK", blocking=True
         )
         assert (flag, blocking, note) == (expected, True, "")
+
+
+# --------------------------------------------------------------------------
+# The other direction: a floor, not a ceiling
+# --------------------------------------------------------------------------
+
+
+def test_a_score_floor_reads_the_interval_the_other_way_round():
+    """`min_score` is a floor, so the *bad* side is below it. An 0.81 AUC
+    against `min_score=0.80` on a small sample is exactly as much noise as a
+    0.11 disparity against a 0.10 ceiling, and the reading has to mirror.
+    """
+    interval = Interval(point=0.81, low=0.74, high=0.88, level=0.95, samples=300)
+
+    flag, _, note = resolve(
+        interval, 0.80, point=0.81, risk_flag="PERFORMANCE_RISK", flag_when=BELOW
+    )
+    assert flag == UNCERTAIN_FLAG
+    assert "cannot rule out a breach" in note
+
+    # Whole interval clear of the floor -> clean.
+    clear = Interval(point=0.91, low=0.88, high=0.94, level=0.95, samples=300)
+    assert resolve(clear, 0.80, point=0.91, risk_flag="X", flag_when=BELOW)[0] == "OK"
+    assert "sits above 0.800" in resolve(clear, 0.80, point=0.91, risk_flag="X", flag_when=BELOW)[2]
+
+    # Whole interval under the floor -> a finding, and it blocks.
+    short = Interval(point=0.60, low=0.55, high=0.66, level=0.95, samples=300)
+    flag, blocking, note = resolve(
+        short, 0.80, point=0.60, risk_flag="PERFORMANCE_RISK", flag_when=BELOW, blocking=True
+    )
+    assert (flag, blocking) == ("PERFORMANCE_RISK", True)
+    assert "sits below 0.800" in note
+
+
+def test_the_same_interval_reads_opposite_ways_on_the_two_directions():
+    """The one property that would catch a copy-paste of the wrong direction
+    into a check: a floor and a ceiling cannot agree about the same numbers."""
+    interval = Interval(point=0.5, low=0.4, high=0.6, level=0.95, samples=300)
+    above = resolve(interval, 0.30, point=0.5, risk_flag="X", flag_when=ABOVE)
+    below = resolve(interval, 0.30, point=0.5, risk_flag="X", flag_when=BELOW)
+    assert above[0] == "X" and below[0] == "OK"
+
+
+def test_an_unknown_direction_is_refused():
+    with pytest.raises(GateConfigurationError, match="flag_when"):
+        resolve(None, 0.1, point=0.2, risk_flag="X", flag_when="sideways")

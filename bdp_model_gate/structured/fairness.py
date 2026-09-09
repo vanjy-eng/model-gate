@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import numpy as np
 import pandas as pd
 
@@ -17,7 +15,7 @@ from ..metrics import to_class_labels, to_hard_labels
 from ..model import ModelAdapter
 from ..stats import correlation_ratio, selection_rate_difference
 from ..task import ALL_TASKS, CLASSIFICATION_TASKS, MULTICLASS, resolve_task
-from ..uncertainty import ON_UNCERTAIN, bootstrap, resolve
+from ..uncertainty import Uncertainty
 
 logger = get_logger("fairness")
 
@@ -190,28 +188,9 @@ class DisparateImpactCheck(BaseCheck):
         uncertainty: UncertaintyConfig | None = None,
     ):
         self.config = config or FairnessConfig()
-        self.uncertainty = uncertainty or UncertaintyConfig()
-        # Fail while the suite is being built rather than partway through a
-        # run — the same treatment a typo'd metric name gets.
-        if self.uncertainty.on_uncertain not in ON_UNCERTAIN:
-            raise GateConfigurationError(
-                f"uncertainty.on_uncertain={self.uncertainty.on_uncertain!r} — must be "
-                f"one of {', '.join(ON_UNCERTAIN)}"
-            )
-
-    def _interval(self, statistic, frame) -> Any:
-        """The bootstrap interval for one attribute, or None when it is off or
-        the data cannot support one."""
-        if not self.uncertainty.compute_intervals:
-            return None
-        return bootstrap(
-            statistic,
-            frame,
-            samples=self.uncertainty.bootstrap_samples,
-            level=self.uncertainty.confidence_level,
-            random_state=self.uncertainty.random_state,
-            min_rows=self.uncertainty.min_rows_for_interval,
-        )
+        # Validates `on_uncertain` at construction, so a typo fails while the
+        # suite is being built rather than partway through a run.
+        self.uncertainty = Uncertainty(uncertainty)
 
     def run(self, context) -> list[CheckResult]:
         if context.protected_df is None or context.protected_df.empty:
@@ -305,39 +284,34 @@ class DisparateImpactCheck(BaseCheck):
             # statistic reads, not from X — so a wide feature frame costs
             # nothing here, and two runs on the same three columns agree.
             frame = pd.DataFrame({"y_true": truth, "y_pred": predicted, "group": groups})
-            interval = self._interval(parity, frame)
+            interval = self.uncertainty.interval(parity, frame)
             dpd = interval.point if interval is not None else parity(np.arange(len(frame)))
 
-            flag, blocking, note = resolve(
+            verdict = self.uncertainty.verdict(
                 interval,
                 threshold,
                 point=dpd,
                 risk_flag="DISPARITY_RISK",
-                on_uncertain=self.uncertainty.on_uncertain,
                 blocking=self.blocking,
             )
-            measured = interval.describe() if interval is not None else f"{dpd:.3f} (no interval)"
-            metadata = {
-                "protected_attr": attr,
-                "demographic_parity_diff": round(dpd, 3),
-                "threshold": threshold,
-                "decision_threshold": self.config.decision_threshold,
-                "on_uncertain": self.uncertainty.on_uncertain,
-            }
-            if interval is not None:
-                metadata.update(interval.as_metadata())
-
             results.append(
                 CheckResult(
                     self.name,
                     self.category,
-                    flag,
+                    verdict.flag,
                     detail=(
-                        f"{attr}: demographic parity diff={measured} "
-                        f"(max {threshold}){favourable_note}{note}"
+                        f"{attr}: demographic parity diff="
+                        f"{self.uncertainty.measured(interval, dpd)} "
+                        f"(max {threshold}){favourable_note}{verdict.note}"
                     ),
-                    blocking=blocking,
-                    metadata=metadata,
+                    blocking=verdict.blocking,
+                    metadata={
+                        "protected_attr": attr,
+                        "demographic_parity_diff": round(dpd, 3),
+                        "threshold": threshold,
+                        "decision_threshold": self.config.decision_threshold,
+                        **verdict.metadata,
+                    },
                 )
             )
         return results
