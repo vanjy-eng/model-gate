@@ -529,7 +529,17 @@ separate docs change. If the number was wrong *before* the release, it is a
 
 ## Pull requests
 
-The `main` branch requires a PR — direct pushes are blocked by a ruleset.
+Every change reaches `main` through a PR.
+
+!!! note
+    That is currently a **convention, not enforcement.** The `main-lock`
+    ruleset was written to block direct pushes and its ref condition is
+    `refs/heads/"main"` — with literal quote characters — so it matches no
+    branch that exists and has never applied to anything. It also carries no
+    required-status-check rule, so a red matrix would not block a merge
+    either. Both are the first item in [`ROADMAP.md`](ROADMAP.md). Until they
+    are fixed, treat the rules below as binding on yourself, because nothing
+    else is.
 
 1. Branch from an up-to-date `main`, named per [Branches](#branches) above.
 2. Make the change, with tests.
