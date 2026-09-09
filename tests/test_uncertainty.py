@@ -60,6 +60,16 @@ def _context(groups, y_pred, y_true):
 
 
 def _check(**uncertainty):
+    """A parity check with the interval settings under test.
+
+    `importorskip` sits here rather than at module scope on purpose. The
+    interval machinery in `bdp_model_gate.uncertainty` and the statistic in
+    `bdp_model_gate.stats` are numpy-only and must keep working on a **core
+    install**, so the tests that exercise them directly still run there.
+    `DisparateImpactCheck` reports NOT_APPLICABLE without fairlearn, so only
+    the tests that go through the check skip.
+    """
+    pytest.importorskip("fairlearn", reason="disparate_impact needs the [structured] extra")
     uncertainty.setdefault("bootstrap_samples", SAMPLES)
     config = GateConfig(uncertainty=UncertaintyConfig(**uncertainty))
     return DisparateImpactCheck(config.fairness, config.uncertainty)
