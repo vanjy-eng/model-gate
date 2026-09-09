@@ -91,8 +91,50 @@ def test_perfectly_fair_gives_exactly_zero():
         )
     )[0]
 
+    # The point estimate is still exactly what it always was, and that is the
+    # known answer this test exists for.
+    assert result.metadata["demographic_parity_diff"] == pytest.approx(0.0)
+
+    # The *verdict* changed in 0.6.0, and not because the check regressed.
+    # 400 rows at a selection rate of 0.5 carry a standard error of 0.05 on
+    # the difference, so the 95% interval reaches about 0.11 — past the
+    # default disparity_threshold of 0.10. This sample genuinely cannot
+    # distinguish a perfectly fair model from one 0.10 out, and the honest
+    # answer is to say so rather than to report a clean pass.
+    assert result.flag == "UNCERTAIN"
+    assert result.blocking is False
+    assert "cannot rule out a breach" in result.detail
+
+
+def test_a_fair_model_reads_clean_once_the_sample_can_show_it():
+    """The other side of the previous test, and the pair documents the
+    crossover — which is the practical thing a reader needs.
+
+    1.96/sqrt(n) < 0.10 puts the boundary near n = 384, so 1,000 rows is
+    comfortably enough for a genuinely fair model to report OK. Below roughly
+    500 rows a 0.10 threshold is inside the noise floor whatever the model
+    does; above it, clean models stay clean.
+    """
+    pytest.importorskip("fairlearn")
+    n = 1000
+    gender = np.where(np.arange(n) % 2 == 0, "M", "F")
+    y_pred = np.resize([1, 1, 0, 0], n)
+
+    result = DisparateImpactCheck().run(
+        StructuredGateContext(
+            model=Constant(),
+            X=pd.DataFrame({"x": np.arange(n, dtype=float)}),
+            y_true=np.resize([0, 1], n),
+            y_pred=y_pred,
+            protected_df=pd.DataFrame({"gender": gender}),
+            task="binary",
+        )
+    )[0]
+
     assert result.metadata["demographic_parity_diff"] == pytest.approx(0.0)
     assert result.flag == "OK"
+    assert result.metadata["ci_high"] < result.metadata["threshold"]
+    assert "whole interval sits below" in result.detail
 
 
 @pytest.mark.parametrize("rate_m,rate_f", [(1.0, 0.5), (0.8, 0.2), (0.6, 0.6)])

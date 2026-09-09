@@ -151,12 +151,77 @@ proportion near 0.5, n=30 gives a standard error of about 0.09, so the
 
 A gate that flips on resampling teaches people to route around it.
 
-- Bootstrap intervals on the fairness and performance metrics.
-- Flag on the **interval** relative to the threshold, not the point — or at
-  minimum report it so a human can judge.
+#### Decided: the interval both gates and reports, and the interval decides which
+
+The earlier version of this entry left it open — "flag on the interval, or at
+minimum report it". Both, and the choice is not a mode the user picks per run:
+it falls out of where the interval sits.
+
+| Interval vs threshold | Meaning | Verdict |
+|---|---|---|
+| entirely **above** | the finding is real | flag, with the check's normal `blocking` |
+| **straddles** it | *you do not know* | `NEEDS_REVIEW`, non-blocking, interval in the detail |
+| entirely **below** | clean | `OK` |
+
+That three-way split is the machinery this library already has, and it maps
+onto what the two outcomes are actually *for*: a report is something a
+governance session discusses, a gate breaks a CI pipeline. "The disparity might
+be 0.06 and might be 0.14" is a conversation, not a build failure.
+
+#### Configurable, because a gate nobody can overrule gets switched off
+
+The tool must not hold back a team that has looked at the uncertainty and
+accepted the risk. New `UncertaintyConfig`:
+
+| Field | Default | Effect |
+|---|---|---|
+| `compute_intervals` | `True` | off entirely — bootstrapping is not free |
+| `confidence_level` | `0.95` | |
+| `bootstrap_samples` | `1000` | the cost lever; recorded in metadata |
+| `on_uncertain` | `"review"` | `"block"` \| `"review"` \| `"point"` |
+
+`on_uncertain` is the escape hatch:
+
+- **`"review"`** (default) — a straddling interval routes to a human.
+- **`"block"`** — the precautionary posture. If it *might* breach, stop. Some
+  regulated deployments will want this, and it is one branch in the same
+  comparison.
+- **`"point"`** — decide exactly as today, on the point estimate. **The
+  interval is still computed and still printed in the detail string and the
+  metadata**, so it reaches the governance pack and the conversation happens
+  there. This is "we have seen the uncertainty and accepted it", and it must
+  not require switching the check off to express.
+
+Note what `"point"` deliberately does *not* do: suppress the number. Accepting
+a risk and not being told about it are different things, and only the first is
+a decision.
+
+#### The constraint that will bite: an interval must not depend on row order
+
+`tests/test_invariants.py::test_row_order_does_not_change_the_verdict` asserts
+that permuting the validation set cannot move a verdict. A bootstrap that
+resamples **positions** under a fixed seed breaks that: the same seed picks the
+same indices, so a re-sorted frame yields a different resample and therefore a
+different interval — and, near a threshold, a different verdict.
+
+This is the `stable_sample` problem again, and the answer is the same one:
+resample by row **content**, not position. Whatever the mechanism, the property
+is non-negotiable and belongs in `test_invariants.py` beside the existing
+permutation test. Sorting a CSV must not change whether a model ships.
+
+#### Cost
+
+Bootstrap the *statistic* over resampled indices in numpy. Never re-run a
+check `bootstrap_samples` times — the fairness suite would take minutes.
+Record `bootstrap_samples` in metadata so a reader knows how much evidence is
+behind the interval.
+
+#### Also in scope
+
 - **A split-stability test**: halve the validation set at random and assert
   the verdict agrees. It would fail today, and it belongs beside the
-  permutation-invariance test that found the sampling bug.
+  permutation-invariance test that found the sampling bug. Its failures are
+  the map of which checks need intervals most.
 - **Multiple-comparison control.** Proxy correlation tests every numeric
   feature against every attribute; with twenty comparisons at α=0.05 you
   expect a false positive by chance. Benjamini–Hochberg or Holm.

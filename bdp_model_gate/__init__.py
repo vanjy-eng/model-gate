@@ -32,6 +32,7 @@ from .config import (
     GateConfig,
     PerformanceConfig,
     SecurityConfig,
+    UncertaintyConfig,
 )
 from .core import BaseCheck, CheckResult, GateReport, ModelGate, StructuredGateContext
 from .task import ALL_TASKS, BINARY, MULTICLASS, REGRESSION
@@ -69,6 +70,7 @@ __all__ = [
     "PerformanceConfig",
     "ComplianceConfig",
     "SecurityConfig",
+    "UncertaintyConfig",
     "run_structured_gate",
     "__version__",
 ]

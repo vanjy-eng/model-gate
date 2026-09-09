@@ -63,7 +63,7 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         FeatureContractCheck(config.validation),
         FeatureDriftCheck(config.validation),
         ProxyCorrelationCheck(config.fairness),
-        DisparateImpactCheck(config.fairness),
+        DisparateImpactCheck(config.fairness, config.uncertainty),
         ShapSubgroupCheck(config.fairness),
         CounterfactualFlipCheck(config.fairness),
         # Separation and sufficiency. Reported alongside demographic parity
