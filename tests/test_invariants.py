@@ -691,6 +691,15 @@ def _verdicts_on(rows, book, checks):
 
 
 def _interval_checks(mode):
+    """The interval-bearing checks, on the structured extra.
+
+    `disparate_impact` needs fairlearn and `roc_auc` needs scikit-learn, so
+    the split-stability pair skips on a core install rather than measuring the
+    stability of three NOT_APPLICABLE results.
+    """
+    pytest.importorskip("fairlearn", reason="needs the [structured] extra")
+    pytest.importorskip("sklearn", reason="needs the [structured] extra")
+
     from bdp_model_gate import PerformanceConfig, UncertaintyConfig
     from bdp_model_gate.structured.calibration_checks import CalibrationCheck
     from bdp_model_gate.structured.fairness import DisparateImpactCheck
