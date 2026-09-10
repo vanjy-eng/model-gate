@@ -101,13 +101,58 @@ def correlation_ratio(values: pd.Series, groups: pd.Series) -> float:
     correlation it needs no ordering on the groups, which is what makes it
     the right statistic against a categorical attribute.
     """
-    overall_mean = values.mean()
-    ss_between = sum(
-        len(values[groups == g]) * (values[groups == g].mean() - overall_mean) ** 2
-        for g in groups.unique()
-    )
-    ss_total = ((values - overall_mean) ** 2).sum()
-    return float(ss_between / ss_total) if ss_total > 0 else 0.0
+    x = np.asarray(values, dtype=float)
+    codes, _ = pd.factorize(np.asarray(groups))
+    if x.size == 0:
+        return 0.0
+
+    overall = float(x.mean())
+    ss_total = float(((x - overall) ** 2).sum())
+    if ss_total <= 0:
+        return 0.0
+
+    # bincount rather than a loop over `groups.unique()` with boolean
+    # indexing. Identical arithmetic, and the loop cost 1.3 ms at n=5000 —
+    # which made the permutation test below 5 seconds instead of a tenth of
+    # one. `test_uncertainty.py` asserts the two agree.
+    n_groups = int(codes.max()) + 1
+    counts = np.bincount(codes, minlength=n_groups).astype(float)
+    sums = np.bincount(codes, weights=x, minlength=n_groups)
+    present = counts > 0
+    group_means = sums[present] / counts[present]
+    ss_between = float((counts[present] * (group_means - overall) ** 2).sum())
+    return ss_between / ss_total
+
+
+def benjamini_hochberg(pvalues: np.ndarray) -> np.ndarray:
+    """Benjamini-Hochberg adjusted p-values (q-values), in the input order.
+
+    Controls the **false discovery rate**: with `q <= 0.05`, at most 5% of the
+    cells you flag are expected to be chance. That is the right guarantee for
+    a screening grid, where the question is "which of these forty pairs are
+    worth looking at" rather than "is this one specific pair real".
+
+    Holm would control the family-wise error rate instead — the probability of
+    *any* false positive — which is a stricter promise than a proxy screen
+    needs and would hide real associations to make it.
+
+    Monotone by construction: the cumulative minimum from the largest p-value
+    downwards, so a stronger association can never come out with a worse
+    q-value than a weaker one.
+    """
+    p = np.asarray(pvalues, dtype=float)
+    n = p.size
+    if n == 0:
+        return p
+    order = np.argsort(p, kind="stable")
+    ranks = np.arange(1, n + 1, dtype=float)
+    scaled = p[order] * n / ranks
+    # Enforce monotonicity from the top down, then clip: a q-value above 1 is
+    # not a probability.
+    adjusted = np.minimum.accumulate(scaled[::-1])[::-1]
+    out = np.empty_like(p)
+    out[order] = np.clip(adjusted, 0.0, 1.0)
+    return out
 
 
 def pearson_r(a: np.ndarray, b: np.ndarray) -> float:
@@ -126,6 +171,7 @@ def pearson_r(a: np.ndarray, b: np.ndarray) -> float:
 
 __all__ = [
     "average_ranks",
+    "benjamini_hochberg",
     "correlation_ratio",
     "pearson_r",
     "rank_auc",

@@ -13,9 +13,15 @@ from ..core.base import BaseCheck, CheckResult
 from ..exceptions import GateConfigurationError
 from ..metrics import to_class_labels, to_hard_labels
 from ..model import ModelAdapter
-from ..stats import correlation_ratio, selection_rate_difference
+from ..stats import benjamini_hochberg, correlation_ratio, selection_rate_difference
 from ..task import ALL_TASKS, CLASSIFICATION_TASKS, MULTICLASS, resolve_task
-from ..uncertainty import Uncertainty
+from ..uncertainty import (
+    BLOCK,
+    POINT,
+    UNCERTAIN_FLAG,
+    Uncertainty,
+    permutation_pvalue,
+)
 
 logger = get_logger("fairness")
 
@@ -29,8 +35,90 @@ class ProxyCorrelationCheck(BaseCheck):
     blocking = False
     supported_tasks = ALL_TASKS  # compares features to attributes, not predictions
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
+
+    def _qvalues(self, X, protected_df, grid) -> pd.DataFrame | None:
+        """Benjamini-Hochberg q-values for every cell of the grid, or None.
+
+        The grid is a screen: a modest frame is forty comparisons, and a few
+        will look strong by chance. eta-squared alone cannot tell a real
+        association from that, because it is an effect size with no notion of
+        how much data is behind it.
+
+        The p-value is a **permutation** test rather than an F-test, for the
+        reason most of this library's statistics are numpy: it needs no
+        distributional assumption and no scipy, so the proxy screen keeps
+        working on a core install. Shuffling the attribute labels against the
+        feature values is exactly the null being tested — no association —
+        and `permutation_pvalue` does it over the canonical row order, so a
+        re-sorted frame cannot change a q-value.
+        """
+        if not self.uncertainty.config.compute_intervals:
+            return None
+
+        # The permutation count bounds the smallest p-value obtainable, and
+        # Benjamini-Hochberg multiplies the strongest cell's p-value by the
+        # number of comparisons. So with `m` cells the smallest reachable
+        # q-value is about `m / samples` — and if that exceeds the FDR, **no
+        # cell can ever be significant**, however real the association is.
+        #
+        # Left unchecked that reports every genuine proxy as UNCERTAIN, which
+        # is a confidently wrong verdict wearing humility. Say what is needed
+        # and fall back to the effect-size rule instead of producing q-values
+        # that cannot mean anything.
+        n_cells = int(grid.to_numpy().size)
+        samples = self.uncertainty.config.bootstrap_samples
+        needed = int(np.ceil(n_cells / max(self.config.proxy_fdr, 1e-12)))
+        if n_cells and samples < needed:
+            logger.warning(
+                "%s: %d comparison(s) at a %.0f%% false-discovery rate need at least %d "
+                "permutations, and uncertainty.bootstrap_samples is %d — no cell could "
+                "reach significance, so the grid is reported on effect size alone. "
+                "Raise bootstrap_samples to %d, or narrow the feature set.",
+                self.name,
+                n_cells,
+                self.config.proxy_fdr * 100,
+                needed,
+                samples,
+                needed,
+            )
+            return None
+
+        cells, pvalues = [], []
+        for feature in grid.index:
+            values = X[feature].to_numpy(dtype=float)
+            for attr in grid.columns:
+                labels = protected_df[attr].to_numpy()
+                frame = pd.DataFrame({"value": values, "group": labels})
+
+                def eta(base, permuted, values=values, labels=labels):
+                    return correlation_ratio(pd.Series(values[base]), pd.Series(labels[permuted]))
+
+                p = permutation_pvalue(
+                    eta,
+                    frame,
+                    samples=self.uncertainty.config.bootstrap_samples,
+                    random_state=self.uncertainty.config.random_state,
+                    min_rows=self.uncertainty.config.min_rows_for_interval,
+                )
+                if p is None:
+                    return None
+                cells.append((feature, attr))
+                pvalues.append(p)
+
+        if not cells:
+            return None
+        adjusted = benjamini_hochberg(np.asarray(pvalues))
+        out = pd.DataFrame(np.nan, index=grid.index, columns=grid.columns, dtype=float)
+        for (feature, attr), q in zip(cells, adjusted):
+            out.loc[feature, attr] = q
+        return out
 
     @staticmethod
     def _grid(X, protected_df) -> pd.DataFrame:
@@ -126,32 +214,101 @@ class ProxyCorrelationCheck(BaseCheck):
 
         grid = self._grid(X, protected_df)
         values = grid.to_numpy(dtype=float)
+        qvalues = self._qvalues(X, protected_df, grid)
+        n_cells = int(values.size)
         results = []
+
         for i, feature in enumerate(grid.index):
             for j, attr in enumerate(grid.columns):
                 eta_sq = float(values[i, j])
-                if eta_sq > self.config.proxy_corr_threshold:
+                if eta_sq <= self.config.proxy_corr_threshold:
+                    continue
+
+                metadata = {
+                    "feature": feature,
+                    "protected_attr": attr,
+                    "proxy_strength": round(eta_sq, 3),
+                    "threshold": self.config.proxy_corr_threshold,
+                    "n_comparisons": n_cells,
+                }
+                if qvalues is None:
+                    # No multiple-comparison control available — the effect
+                    # size alone decides, exactly as before 0.6.0.
                     results.append(
                         CheckResult(
                             self.name,
                             self.category,
                             "PROXY_RISK",
-                            detail=f"{feature} correlates with {attr} (eta^2={eta_sq:.3f})",
+                            detail=(
+                                f"{feature} correlates with {attr} (eta^2={eta_sq:.3f}, "
+                                "no significance test)"
+                            ),
                             blocking=self.blocking,
-                            metadata={
-                                "feature": feature,
-                                "protected_attr": attr,
-                                "proxy_strength": round(eta_sq, 3),
-                            },
+                            metadata=metadata,
                         )
                     )
+                    continue
+
+                q = float(qvalues.loc[feature, attr])
+                metadata.update(
+                    {
+                        "q_value": round(q, 4),
+                        "fdr": self.config.proxy_fdr,
+                        "on_uncertain": self.uncertainty.config.on_uncertain,
+                    }
+                )
+                survives = q <= self.config.proxy_fdr
+                shared = (
+                    f"{feature} correlates with {attr} (eta^2={eta_sq:.3f}, "
+                    f"q={q:.3f} across {n_cells} comparison(s))"
+                )
+                if survives:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        "",
+                    )
+                elif self.uncertainty.config.on_uncertain == BLOCK:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        f" — above the {self.config.proxy_fdr:.0%} false-discovery rate, "
+                        "reported anyway (on_uncertain='block')",
+                    )
+                elif self.uncertainty.config.on_uncertain == POINT:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        f" — above the {self.config.proxy_fdr:.0%} false-discovery rate, "
+                        "accepted as a finding (on_uncertain='point')",
+                    )
+                else:
+                    flag, blocking, note = (
+                        UNCERTAIN_FLAG,
+                        False,
+                        f" — a strong effect, but {n_cells} comparisons make one this "
+                        f"size likely by chance: it does not survive Benjamini-Hochberg "
+                        f"at {self.config.proxy_fdr:.0%}",
+                    )
+                results.append(
+                    CheckResult(
+                        self.name,
+                        self.category,
+                        flag,
+                        detail=shared + note,
+                        blocking=blocking,
+                        metadata=metadata,
+                    )
+                )
+
         return results or [
             CheckResult(
                 self.name,
                 self.category,
                 "OK",
-                "no proxy correlations above threshold",
+                f"no proxy correlations above threshold across {n_cells} comparison(s)",
                 self.blocking,
+                metadata={"n_comparisons": n_cells},
             )
         ]
 

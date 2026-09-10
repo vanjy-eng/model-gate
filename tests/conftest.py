@@ -73,6 +73,11 @@ def pytest_configure(config):
         "markers",
         "expect_check_error: this test deliberately produces a CHECK_ERROR result",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_bootstrap: run with the resample count this test asks for, not the "
+        "suite's reduced one",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +130,7 @@ SUITE_BOOTSTRAP_SAMPLES = 150
 
 
 @pytest.fixture(autouse=True)
-def _cheap_bootstrap(monkeypatch):
+def _cheap_bootstrap(request, monkeypatch):
     """Lowers `bootstrap_samples` for the suite, and only for the suite.
 
     The library default is 1,000 resamples, which is the conventional floor
@@ -143,6 +148,12 @@ def _cheap_bootstrap(monkeypatch):
     `test_package.py` asserts the library default is still 1,000, so this
     fixture cannot quietly become the real one.
 
+    Opt out with `@pytest.mark.real_bootstrap` where the resample count is
+    part of what the test is asserting. The proxy grid needs it: the
+    permutation count bounds the smallest reachable q-value, so 150 draws
+    cannot resolve a nine-cell grid at a 5% false-discovery rate and the
+    check correctly refuses to try.
+
     It clamps `Uncertainty.__init__` rather than the dataclass default,
     because a dataclass captures its defaults into the generated `__init__`
     at class-creation time — patching the class attribute afterwards changes
@@ -150,6 +161,9 @@ def _cheap_bootstrap(monkeypatch):
     fixture was. Direct `bootstrap()` calls are untouched, so the tests that
     are genuinely about the interval keep the sample counts they ask for.
     """
+    if request.node.get_closest_marker("real_bootstrap"):
+        return
+
     from dataclasses import replace
 
     from bdp_model_gate.uncertainty import Uncertainty

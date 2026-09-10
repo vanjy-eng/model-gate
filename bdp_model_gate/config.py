@@ -48,6 +48,14 @@ class FairnessConfig:
     loss_ratio_threshold: float = 0.10  # max relative gap in premium-over-expected-loss
     min_group_size: int = 30  # groups smaller than this are reported, not scored
     proxy_corr_threshold: float = 0.30  # eta^2 above this = proxy risk
+    #: False-discovery rate for the proxy grid. `proxy_correlation` tests
+    #: every numeric feature against every protected attribute, so a modest
+    #: frame is forty comparisons and a few will look strong by chance. An
+    #: effect must clear `proxy_corr_threshold` **and** survive
+    #: Benjamini-Hochberg at this rate before it is reported as a finding —
+    #: two conditions, the same shape as `ValidationConfig.leakage_ratio`
+    #: beside `leakage_min_power`.
+    proxy_fdr: float = 0.05
     shap_gap_threshold: float = 0.50  # max cross-group SHAP gap, relative to mean |contribution|
     counterfactual_shift_threshold: float = 0.05  # max prediction shift on attribute flip
 

@@ -62,7 +62,7 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         ValidationStrategyCheck(config.validation, config.compliance),
         FeatureContractCheck(config.validation),
         FeatureDriftCheck(config.validation),
-        ProxyCorrelationCheck(config.fairness),
+        ProxyCorrelationCheck(config.fairness, config.uncertainty),
         DisparateImpactCheck(config.fairness, config.uncertainty),
         ShapSubgroupCheck(config.fairness),
         CounterfactualFlipCheck(config.fairness),

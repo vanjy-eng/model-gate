@@ -16,6 +16,7 @@ accepted it must be able to say so without switching the check off.
 
 from __future__ import annotations
 
+import logging
 import warnings
 
 import numpy as np
@@ -24,8 +25,15 @@ import pytest
 
 from bdp_model_gate import GateConfig, StructuredGateContext, UncertaintyConfig
 from bdp_model_gate.exceptions import GateConfigurationError
-from bdp_model_gate.stats import selection_rate_difference
-from bdp_model_gate.structured.fairness import DisparateImpactCheck
+from bdp_model_gate.stats import (
+    benjamini_hochberg,
+    correlation_ratio,
+    selection_rate_difference,
+)
+from bdp_model_gate.structured.fairness import (
+    DisparateImpactCheck,
+    ProxyCorrelationCheck,
+)
 from bdp_model_gate.uncertainty import (
     ABOVE,
     BELOW,
@@ -37,6 +45,7 @@ from bdp_model_gate.uncertainty import (
     Uncertainty,
     bootstrap,
     canonical_order,
+    permutation_pvalue,
     resolve,
 )
 
@@ -512,3 +521,176 @@ def test_a_statistic_that_always_warns_yields_no_interval():
         return 0.5
 
     assert bootstrap(always_warns, frame, samples=100) is None
+
+
+# --------------------------------------------------------------------------
+# Multiple comparisons: the proxy grid
+# --------------------------------------------------------------------------
+
+
+def test_benjamini_hochberg_matches_the_worked_example():
+    p = np.array([0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205, 0.212, 0.216])
+    q = benjamini_hochberg(p)
+    assert q[0] == pytest.approx(0.010)
+    assert q[1] == pytest.approx(0.040)
+    assert q[-1] == pytest.approx(0.216)
+    # Monotone, and a q-value is a probability.
+    assert np.all(np.diff(q[np.argsort(p)]) >= -1e-12)
+    assert np.all(q <= 1.0) and np.all(q >= 0.0)
+    # Degenerate inputs pass through rather than raising.
+    assert benjamini_hochberg(np.array([0.03])) == pytest.approx([0.03])
+    assert benjamini_hochberg(np.array([])).size == 0
+
+
+def test_the_vectorised_correlation_ratio_agrees_with_the_loop_it_replaced():
+    """`correlation_ratio` was a Python loop over `groups.unique()` with
+    boolean indexing, at 1.3 ms per call on 5,000 rows — which made the
+    permutation test five seconds instead of half of one. bincount is 11x
+    faster and has to give the same answer."""
+
+    def loop_implementation(values, groups):
+        overall = values.mean()
+        between = sum(
+            len(values[groups == g]) * (values[groups == g].mean() - overall) ** 2
+            for g in groups.unique()
+        )
+        total = ((values - overall) ** 2).sum()
+        return float(between / total) if total > 0 else 0.0
+
+    rng = np.random.default_rng(0)
+    for _ in range(40):
+        n, k = int(rng.integers(30, 900)), int(rng.integers(2, 6))
+        groups = pd.Series(rng.choice([f"g{i}" for i in range(k)], n))
+        values = pd.Series(rng.normal(size=n) + groups.map({f"g{i}": i * 0.4 for i in range(k)}))
+        assert correlation_ratio(values, groups) == pytest.approx(
+            loop_implementation(values, groups), abs=1e-12
+        )
+
+
+def _proxy_grid(seed, n=45, k=8, n_noise=8, with_real_proxy=False):
+    """A grid of pure-noise features against a many-level attribute.
+
+    eta-squared is inflated by the group count — its expectation under the
+    null is about (k-1)/(n-1) — so at n=45 with 8 zones a noise column crosses
+    the 0.30 threshold about 5% of the time. That is where multiple-comparison
+    control earns its keep; on a two-level attribute at any reasonable sample
+    size, chance crossings are already vanishingly rare.
+    """
+    rng = np.random.default_rng(seed)
+    region = rng.choice([f"zone{i}" for i in range(k)], n)
+    X = pd.DataFrame({f"noise_{i}": rng.normal(size=n) for i in range(n_noise)})
+    if with_real_proxy:
+        X["territory_factor"] = pd.Series(region).map(
+            {f"zone{i}": 0.8 + 0.06 * i for i in range(k)}
+        ).to_numpy() + rng.normal(0, 0.02, n)
+    return StructuredGateContext(
+        X=X,
+        y_true=np.tile([0, 1], n // 2 + 1)[:n],
+        y_pred=np.linspace(0, 1, n),
+        protected_df=pd.DataFrame({"region": region}),
+        predict_fn=lambda frame: np.zeros(len(frame)),
+        task="binary",
+    )
+
+
+def _proxy_check(**uncertainty):
+    uncertainty.setdefault("bootstrap_samples", 1000)
+    config = GateConfig(uncertainty=UncertaintyConfig(**uncertainty))
+    return ProxyCorrelationCheck(config.fairness, config.uncertainty)
+
+
+@pytest.mark.real_bootstrap
+@pytest.mark.parametrize(
+    "mode,expected",
+    [("review", UNCERTAIN_FLAG), ("block", "PROXY_RISK"), (POINT, "PROXY_RISK")],
+)
+def test_a_chance_crossing_is_demoted(mode, expected):
+    """Seed 4 puts `noise_1` at eta^2 = 0.332 — over the 0.30 threshold and
+    pure noise. Benjamini-Hochberg gives it q = 0.256 across 8 comparisons, so
+    `review` routes it to a human instead of reporting a proxy that is not
+    there. `point` keeps the pre-0.6.0 effect-size-only verdict.
+    """
+    results = _proxy_check(on_uncertain=mode).run(_proxy_grid(seed=4))
+    finding = next(r for r in results if r.metadata.get("feature") == "noise_1")
+    assert finding.flag == expected
+    assert finding.metadata["q_value"] > finding.metadata["fdr"]
+    assert finding.metadata["n_comparisons"] == 8
+
+
+@pytest.mark.real_bootstrap
+def test_a_real_proxy_survives_the_correction():
+    """The other half: control that suppressed genuine findings would be
+    worse than no control at all."""
+    results = _proxy_check().run(_proxy_grid(seed=3, n=600, n_noise=8, with_real_proxy=True))
+    findings = [r for r in results if r.flag == "PROXY_RISK"]
+    assert [r.metadata["feature"] for r in findings] == ["territory_factor"]
+    assert findings[0].metadata["q_value"] <= findings[0].metadata["fdr"]
+
+
+@pytest.mark.real_bootstrap
+def test_too_few_permutations_to_resolve_the_grid_says_so(caplog):
+    """The trap this guard exists for.
+
+    The permutation count bounds the smallest p-value obtainable, and BH
+    multiplies the strongest cell's by the number of comparisons — so with
+    `m` cells the smallest reachable q is about `m / samples`. If that exceeds
+    the FDR, **no cell can ever be significant however real the association
+    is**, and every genuine proxy would be reported as UNCERTAIN: a
+    confidently wrong verdict wearing humility.
+    """
+    context = _proxy_grid(seed=3, n=600, n_noise=25, with_real_proxy=True)
+    with caplog.at_level(logging.WARNING, logger="bdp_model_gate.fairness"):
+        results = _proxy_check(bootstrap_samples=200).run(context)
+
+    assert "need at least 520 permutations" in caplog.text
+    finding = next(r for r in results if r.metadata.get("feature") == "territory_factor")
+    assert finding.flag == "PROXY_RISK"
+    assert "no significance test" in finding.detail
+    assert "q_value" not in finding.metadata
+
+
+def test_turning_intervals_off_falls_back_to_effect_size_alone():
+    results = _proxy_check(compute_intervals=False).run(_proxy_grid(seed=4, n_noise=8))
+    finding = next(r for r in results if r.metadata.get("feature") == "noise_1")
+    assert finding.flag == "PROXY_RISK"
+    assert "no significance test" in finding.detail
+
+
+@pytest.mark.real_bootstrap
+def test_a_permutation_pvalue_is_never_exactly_zero():
+    """`(1 + hits) / (1 + draws)`: "no permutation beat the observed value" is
+    evidence bounded by how many were run, not proof."""
+    rng = np.random.default_rng(0)
+    n = 300
+    groups = rng.choice(list("ABC"), n)
+    perfect = pd.Series(groups).map({"A": 0.0, "B": 5.0, "C": 10.0}).to_numpy()
+
+    p = permutation_pvalue(
+        lambda base, permuted: correlation_ratio(
+            pd.Series(perfect[base]), pd.Series(groups[permuted])
+        ),
+        pd.DataFrame({"v": perfect, "g": groups}),
+        samples=200,
+    )
+    assert p is not None
+    assert 0.0 < p <= 1.0 / 201 + 1e-12
+
+
+@pytest.mark.real_bootstrap
+def test_the_proxy_qvalues_do_not_depend_on_row_order():
+    straight = _proxy_grid(seed=4, n_noise=8)
+    order = np.random.default_rng(1).permutation(len(straight.X))
+    shuffled = StructuredGateContext(
+        X=straight.X.iloc[order].reset_index(drop=True),
+        y_true=np.asarray(straight.y_true)[order],
+        y_pred=np.asarray(straight.y_pred)[order],
+        protected_df=straight.protected_df.iloc[order].reset_index(drop=True),
+        predict_fn=straight.predict_fn,
+        task="binary",
+    )
+    before = _proxy_check().run(straight)
+    after = _proxy_check().run(shuffled)
+    assert {r.metadata.get("feature"): r.flag for r in before} == {
+        r.metadata.get("feature"): r.flag for r in after
+    }
+    assert [r.metadata.get("q_value") for r in before] == [r.metadata.get("q_value") for r in after]

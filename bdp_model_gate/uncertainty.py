@@ -347,6 +347,66 @@ class Uncertainty:
         return interval.describe() if interval is not None else f"{point:.3f} (no interval)"
 
 
+def permutation_pvalue(
+    statistic: Callable[[np.ndarray, np.ndarray], float],
+    frame: pd.DataFrame,
+    *,
+    samples: int = 1000,
+    random_state: int = 42,
+    min_rows: int = MIN_ROWS_FOR_INTERVAL,
+) -> float | None:
+    """One-sided permutation p-value, or None when it cannot be computed.
+
+    `statistic(base, permuted)` is called with two position arrays: index one
+    side of the association by `base` and the other by `permuted`. The
+    observed value is `statistic(base, base)`, and the null distribution comes
+    from shuffling. Two arguments rather than one because a permutation test
+    breaks the *pairing* between two variables, and a single-array signature
+    makes it easy to shuffle both and test nothing.
+
+    The p-value carries the add-one correction, `(1 + hits) / (1 + draws)`, so
+    it is never exactly zero: "no permutation beat the observed value" is
+    evidence bounded by how many permutations were run, not proof.
+
+    Order-invariant and deterministic for the same reason `bootstrap` is —
+    shuffling happens over `canonical_order(frame)`.
+    """
+    n = len(frame)
+    if n < max(2, int(min_rows)):
+        return None
+
+    base = canonical_order(frame)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            observed = float(statistic(base, base))
+    except Exception:
+        return None
+    if not np.isfinite(observed):
+        return None
+
+    rng = np.random.default_rng(random_state)
+    hits = drawn = 0
+    for _ in range(max(1, int(samples))):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                value = float(statistic(base, rng.permutation(base)))
+        except Exception:
+            continue
+        if not np.isfinite(value):
+            continue
+        drawn += 1
+        # `>=` rather than `>`: a permutation that ties the observed value is
+        # evidence against the observation being special, not for it.
+        if value >= observed - 1e-12:
+            hits += 1
+
+    if drawn < max(20, int(samples) // 10):
+        return None
+    return (1.0 + hits) / (1.0 + drawn)
+
+
 def resolve(
     interval: Interval | None,
     threshold: float,
@@ -439,5 +499,6 @@ __all__ = [
     "Verdict",
     "bootstrap",
     "canonical_order",
+    "permutation_pvalue",
     "resolve",
 ]
