@@ -790,3 +790,45 @@ def test_the_injection_plot_declines_without_a_side_car():
     assert PromptInjectionCheck().plot(context) is None
     # And report_injection is a list of strings, not a distribution.
     assert ReportInjectionCheck().plot(context) is None
+
+
+@pytest.mark.real_bootstrap
+def test_the_proxy_heatmap_distinguishes_a_chance_crossing():
+    """A chart that presents a chance crossing exactly as it presents a
+    confirmed proxy is the more persuasive of two claims and the wrong one.
+
+    Seed 4 puts `noise_1` over the effect threshold with q = 0.256, so it is
+    ringed muted and marked `?` while a real proxy is ringed in the review
+    colour. Read from the results, so the ring and the report line cannot
+    disagree.
+    """
+    from bdp_model_gate import GateConfig, UncertaintyConfig
+    from bdp_model_gate.plots.style import verdict_colour
+    from bdp_model_gate.structured.fairness import ProxyCorrelationCheck
+
+    rng = np.random.default_rng(4)
+    n, k = 45, 8
+    region = rng.choice([f"zone{i}" for i in range(k)], n)
+    X = pd.DataFrame({f"noise_{i}": rng.normal(size=n) for i in range(8)})
+    context = StructuredGateContext(
+        model=None,
+        X=X,
+        y_true=np.tile([0, 1], n // 2 + 1)[:n],
+        y_pred=np.linspace(0, 1, n),
+        protected_df=pd.DataFrame({"region": region}),
+        predict_fn=lambda frame: np.zeros(len(frame)),
+        task="binary",
+    )
+    config = GateConfig(uncertainty=UncertaintyConfig(bootstrap_samples=1000))
+    check = ProxyCorrelationCheck(config.fairness, config.uncertainty)
+    results = check.run(context)
+    ax = check.plot(context, results)
+
+    unsupported = [r for r in results if r.flag == "UNCERTAIN"]
+    assert unsupported, "the fixture no longer produces a chance crossing"
+
+    marks = [t for t in ax.texts if t.get_text() == "?"]
+    assert len(marks) == len(unsupported)
+    assert "not supported by the correction" in ax.get_title()
+    # Muted, not the review colour a confirmed proxy gets.
+    assert marks[0].get_color() == verdict_colour("NOT_APPLICABLE")

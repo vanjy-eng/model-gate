@@ -20,7 +20,9 @@ verdicts, configuration, custom checks, plugins, validation and the CLI. The
 others assume it and focus on what their task or framework changes.
 
 **06 is the other half:** the fourteen charts, why each one is not a number,
-and the self-contained HTML report a reviewer signs.
+the self-contained HTML report a reviewer signs, and — since 0.6.0 — the
+confidence intervals and the split-stability check that measures what they
+bought.
 
 **07 is the domain case.** The same machinery pointed at a rate filing:
 exposure weighting, actual-vs-expected by decile, the Lorenz Gini against its
@@ -77,8 +79,8 @@ that raised. Run it whenever the library's behaviour changes — a notebook
 committed with stale outputs is worse than no notebook, because the outputs
 look authoritative.
 
-The committed outputs were produced on Python 3.13. Notebook 08 was last
-executed against `bdp-model-gate` 0.5.4; notebook 07 against 0.5.3; notebook 03 against 0.5.2; notebooks 01 and 06 against 0.5.1
+The committed outputs were produced on Python 3.13. Notebooks 06, 07 and 08
+were last executed against `bdp-model-gate` 0.6.0; notebook 03 against 0.5.2; notebook 01 against 0.5.1
 with scikit-learn 1.9, matplotlib 3.11 and seaborn 0.13; notebooks 02, 04 and
 05 against 0.4.1 with scikit-learn 1.7, shap 0.49, torch 2.13 and xgboost 3.4. The split is honest
 rather than tidy: 04 and 05 need frameworks that are not installed in every

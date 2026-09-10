@@ -184,6 +184,37 @@ asks for *transformed*, so an echoing side-car is not mistaken for an obedient
 one. Everything else routes to a person, non-blocking, with the response
 attached. See [Generative side-cars](https://vanjy-eng.github.io/model-gate/docs/security/).
 
+## How sure is it?
+
+Until 0.6.0 every threshold here was compared against a **point estimate with
+no notion of sampling error**. Twelve checks now bootstrap their statistic,
+and where the interval sits decides the verdict:
+
+| Interval vs threshold | Verdict |
+|---|---|
+| entirely on the failing side | the check's risk flag |
+| **straddles it** | `UNCERTAIN` — non-blocking, routed to a human |
+| entirely on the passing side | `OK` |
+
+Halve the same validation set at random and gate both halves, with a floor set
+where the model actually sits: the point estimate disagreed with itself on
+**9 of 10** halvings, intervals on **0 of 10**. A gate that flips on
+resampling teaches people to re-run it until it passes.
+
+```python
+config.uncertainty.on_uncertain = "review"  # default — a straddle asks a human
+config.uncertainty.on_uncertain = "block"  # precautionary: if it might breach, stop
+config.uncertainty.on_uncertain = "point"  # decide as before 0.6.0
+config.uncertainty.compute_intervals = False  # do not spend the time at all
+```
+
+A gate nobody can overrule gets switched off, so `"point"` exists — and it
+still *reports* the interval, because accepting a risk and not being told
+about it are different things. Two things to expect: small validation sets see
+`UNCERTAIN` a lot (below ~500 rows a 0.10 disparity threshold is inside the
+noise floor whatever the model does), and a threshold with no headroom will
+too. See [How sure is it?](https://vanjy-eng.github.io/model-gate/docs/concepts/#how-sure-is-it).
+
 ## Customizing thresholds
 
 ```python
@@ -710,7 +741,6 @@ See [`ROADMAP.md`](ROADMAP.md) for the detail and the decisions behind each.
 
 | Release | Theme |
 |---|---|
-| **0.6.0** | Confidence intervals on every metric, plus pinned lint tooling. |
 | **0.6.1** | Release automation — publish on tag via Trusted Publishing, PyPI behind a required reviewer. |
 | **1.0.0** | A public, subclassable `ModelAdapter`. |
 | Later | Unstructured data (text/image/audio). |

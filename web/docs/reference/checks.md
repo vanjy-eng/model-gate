@@ -459,6 +459,7 @@ those gets switched off.
 |---|---|
 | `OK` | passed |
 | `NOT_APPLICABLE` | skipped — treated as OK |
+| `UNCERTAIN` | the interval straddles the threshold; non-blocking |
 | `CHECK_ERROR` | the check raised; always blocking |
 | risk string | check-specific; blocking per the check |
 
@@ -466,6 +467,11 @@ Two flags are worth calling out by name, because neither is a skip.
 
 `MONOTONICITY_UNCHECKABLE` says a constraint you asserted has **not** been
 verified, and it blocks.
+
+`UNCERTAIN` says the confidence interval on a statistic straddles its
+threshold, so this sample cannot say which side of it the truth is on. One
+flag across the whole suite, non-blocking, and configurable — see
+[How sure is it?](../concepts.md#how-sure-is-it).
 
 `INJECTION_NEEDS_JUDGEMENT` says a response carried no decidable signal — so
 it is neither a pass nor a finding, and it does not block. It is what you get

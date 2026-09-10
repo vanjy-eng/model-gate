@@ -26,8 +26,8 @@ sign it off.
 
 - **[Getting started](getting-started.md)** — install, gate your first model,
   read the report
-- **[Concepts](concepts.md)** — contexts, checks, verdicts, and the
-  degradation contract
+- **[Concepts](concepts.md)** — contexts, checks, verdicts, sampling error,
+  and the degradation contract
 - **[Tasks](tasks/binary.md)** — binary, multiclass and ordinal, regression,
   insurance pricing
 - **[Any model](models.md)** — scikit-learn, PyTorch, XGBoost, remote endpoints

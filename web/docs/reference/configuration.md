@@ -79,6 +79,7 @@ config.validation.require_out_of_time_for_high_risk = False
 | `subgroup_calibration_threshold` | `0.05` | max ECE difference (sufficiency) |
 | `intersectional` | `False` | also evaluate pairwise attribute combinations |
 | `min_group_size` | `30` | groups below this are reported, not scored |
+| `proxy_fdr` | `0.05` | false-discovery rate for the proxy grid — an effect must clear `proxy_corr_threshold` **and** survive Benjamini-Hochberg |
 
 !!! note "All gap thresholds are relative"
     Each is a fraction of the corresponding overall figure — the overall mean,
@@ -103,6 +104,50 @@ Both are plain lists — replace them for your own regime:
 config.compliance.high_risk_use_cases += ["bnpl_limit_setting"]
 config.compliance.required_model_card_fields = ["lawful_basis", "retention_period"]
 ```
+
+## Uncertainty
+
+New in 0.6.0. Twelve checks bootstrap their statistic, and where the interval
+sits relative to the threshold decides the verdict — see
+[How sure is it?](../concepts.md#how-sure-is-it) for why, and for the
+measurement that motivated it.
+
+| Field | Default | Notes |
+|---|---|---|
+| `compute_intervals` | `True` | off entirely — bootstrapping is not free |
+| `confidence_level` | `0.95` | percentile level for the interval |
+| `bootstrap_samples` | `1000` | resamples per statistic; the cost lever, and recorded in metadata |
+| `min_rows_for_interval` | `30` | below this, no interval — resampling twelve rows tells you about those twelve rows |
+| `random_state` | `42` | seeded, so the same data always gives the same interval |
+| `on_uncertain` | `"review"` | `"review"` \| `"block"` \| `"point"` |
+
+`on_uncertain` is the field a team reaches for when the tool is in their way,
+so it is worth being explicit about what each value means:
+
+```python
+config.uncertainty.on_uncertain = "review"  # a straddling interval -> UNCERTAIN, non-blocking
+config.uncertainty.on_uncertain = "block"  # if it might breach, stop
+config.uncertainty.on_uncertain = "point"  # decide as before 0.6.0
+config.uncertainty.compute_intervals = False  # do not spend the time at all
+```
+
+!!! note "`"point"` does not suppress the number"
+    It decides the verdict on the point estimate, and **still reports the
+    interval** in the detail string and the metadata. Accepting a risk and not
+    being told about it are different things, and only the first is a
+    decision.
+
+!!! warning "`bootstrap_samples` interacts with the proxy grid"
+    The permutation count bounds the smallest reachable q-value, and
+    Benjamini-Hochberg multiplies the strongest cell's p-value by the number
+    of comparisons — so with `m` cells the floor on q is about
+    `m / bootstrap_samples`. With 26 comparisons at a 5% FDR you need at least
+    520 permutations; below that no cell can reach significance, and
+    `proxy_correlation` says so and falls back to effect size alone rather
+    than emitting q-values that cannot mean anything.
+
+`proxy_fdr` lives on `FairnessConfig` rather than here, because it is a
+fairness threshold rather than a resampling setting.
 
 ## Actuarial
 

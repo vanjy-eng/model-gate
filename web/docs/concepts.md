@@ -109,6 +109,107 @@ requires an out-of-time holdout and records the claim in the model card.
 hard-fails on every seasonal shift gets switched off, so drift routes to a
 reviewer instead.
 
+## How sure is it?
+
+Until 0.6.0 every check in this library compared a **point estimate to a fixed
+threshold with no notion of sampling error**. `FairnessConfig.min_group_size =
+30` was the only nod to it, and it is not nearly enough: for a proportion near
+0.5, n=30 carries a standard error of 0.09, so the *difference* of two such
+proportions carries one near 0.13. Against a `disparity_threshold` of 0.10,
+the verdict was noise.
+
+That is measurable, and it was measured. Halve the same validation set at
+random and gate both halves:
+
+| | Halvings that disagreed |
+|---|---|
+| point estimate (pre-0.6.0) | **5 of 10** |
+| with intervals | **1 of 10** |
+
+A gate that flips on resampling teaches people to re-run it until it passes,
+which protects nobody.
+
+### Three answers, not two
+
+Twelve checks now bootstrap their statistic, and **where the interval sits
+decides the verdict**:
+
+| Interval vs threshold | Meaning | Verdict |
+|---|---|---|
+| entirely on the failing side | the finding is real | the check's risk flag |
+| **straddles the threshold** | *the data cannot say* | `UNCERTAIN`, non-blocking |
+| entirely on the passing side | clean | `OK` |
+
+The middle row is the addition, and it is the point. "The disparity might be
+0.06 and might be 0.14" is a governance conversation, not a build failure —
+and a report is what a conversation runs on, where a gate just stops a
+pipeline.
+
+`UNCERTAIN` is one flag across the whole suite. `CheckResult.check_name`
+already says which check it came from, and a reviewer should have to learn one
+name that means *the data cannot decide this*.
+
+### You can overrule it
+
+A gate nobody can overrule gets switched off, so
+`UncertaintyConfig.on_uncertain` decides what a straddling interval does:
+
+- **`"review"`** (default) — route it to a human.
+- **`"block"`** — the precautionary posture. If it *might* breach, stop.
+- **`"point"`** — decide on the point estimate, exactly as releases before
+  0.6.0 did.
+
+`"point"` deliberately does not *hide* the interval: it still appears in the
+detail string and the metadata, so the governance pack carries it and the
+argument happens there. **Accepting a risk and not being told about it are
+different things, and only the first is a decision.**
+
+`compute_intervals = False` turns the cost off without disabling the checks.
+
+### What to expect when you turn it on
+
+Two consequences worth knowing before the first run.
+
+**Small validation sets will report `UNCERTAIN` a lot.** Against the default
+`disparity_threshold = 0.10`, a model with *no disparity at all* reads
+`UNCERTAIN` below roughly 500 rows — the threshold is inside the noise floor
+whatever the model does. Above it, clean models read clean:
+
+| rows | interval on a perfectly fair model | verdict |
+|---|---|---|
+| 200 | [0.001, 0.159] | `UNCERTAIN` |
+| 400 | [0.001, 0.110] | `UNCERTAIN` |
+| **600** | **[0.001, 0.096]** | **`OK`** |
+| 5,000 | [0.001, 0.033] | `OK` |
+
+**Set thresholds with headroom.** A model sitting exactly on its floor reads
+`UNCERTAIN` even at 8,000 rows, because you cannot certify that a model clears
+a threshold it is sitting on. That is not a defect in the tool; it is what the
+data supports.
+
+### Multiple comparisons
+
+`proxy_correlation` tests every numeric feature against every protected
+attribute, so a modest frame is forty comparisons and a few will look strong
+by chance. It now needs two conditions: an effect over
+`proxy_corr_threshold` **and** survival of Benjamini-Hochberg at
+`proxy_fdr` — the same shape as `leakage_ratio` beside `leakage_min_power`.
+
+This matters most where η² is inflated by arithmetic rather than by
+association. Its null expectation is about `(k-1)/(n-1)`, so on a two-level
+attribute at any reasonable sample size a chance crossing of 0.30 is
+vanishingly rare; on an eight-level attribute at n=45 it happens 4.7% of the
+time.
+
+### One promise the intervals keep
+
+**Sorting your validation set cannot change a verdict.** A textbook bootstrap
+would break that — a fixed seed draws the same *positions*, so a re-sorted
+frame gets a different resample — so resampling happens over a canonical order
+derived from the rows' own contents, with numeric columns rank-transformed so
+a change of *units* cannot move it either. `tests/test_invariants.py` asserts
+it across every interval-bearing check.
+
 ## The verdict
 
 `GateReport.gate_status` applies one rule:

@@ -150,6 +150,15 @@ class ProxyCorrelationCheck(BaseCheck):
         scan forty rows for it, and the cool cells matter too: they are the
         evidence that the flagged feature is the exception rather than the
         whole feature set leaking.
+
+        Since 0.6.0 a hot cell is not automatically a finding: forty
+        comparisons produce a strong-looking one by chance, and
+        Benjamini-Hochberg says which. **A cell the correction did not support
+        is marked with a `?`** rather than ringed like the rest, because a
+        chart that presents a chance crossing exactly as it presents a
+        confirmed proxy is the more persuasive of two claims and the wrong
+        one. The marks are read from the results, so the ring and the report
+        line cannot disagree.
         """
         from ..plots import require_plotting
         from ..plots.style import caption, new_axes, ring_cell, sharpen_colourbar, verdict_colour
@@ -184,18 +193,45 @@ class ProxyCorrelationCheck(BaseCheck):
 
         # Ring what was actually reported, so the chart and the findings list
         # can be checked against each other at a glance.
+        results = self.run(context) if results is None else results
+        reported = {
+            (r.metadata.get("feature"), r.metadata.get("protected_attr")): r
+            for r in results
+            if r.metadata.get("feature")
+        }
         flagged = verdict_colour("NEEDS_REVIEW")
+        muted = verdict_colour("NOT_APPLICABLE")
+        n_unsupported = 0
         for i, j in zip(*np.where(grid.to_numpy() > self.config.proxy_corr_threshold)):
-            ring_cell(ax, int(j), int(i), flagged)
+            feature, attr = grid.index[int(i)], grid.columns[int(j)]
+            result = reported.get((feature, attr))
+            unsupported = result is not None and result.flag == UNCERTAIN_FLAG
+            ring_cell(ax, int(j), int(i), muted if unsupported else flagged)
+            if unsupported:
+                n_unsupported += 1
+                # Not colour alone: these get printed in greyscale.
+                ax.text(
+                    int(j) + 0.86,
+                    int(i) + 0.18,
+                    "?",
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                    color=muted,
+                )
 
-        ax.set_title(f"Proxy strength (ringed above {self.config.proxy_corr_threshold})")
+        title = f"Proxy strength (ringed above {self.config.proxy_corr_threshold}"
+        title += "; ? = not supported by the correction)" if n_unsupported else ")"
+        ax.set_title(title)
         ax.set_xlabel(" ")  # a placeholder the caption can anchor beneath
         ax.set_ylabel("")
         ax.tick_params(labelrotation=0)
         caption(
             ax,
             "eta² is the share of the feature's variance explained by group membership.\n"
-            "A hot cell means dropping the attribute from the model does not remove it.",
+            "A hot cell means dropping the attribute from the model does not remove it. "
+            "A ? marks one\nthat forty comparisons could produce by chance.",
         )
         return ax
 

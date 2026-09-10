@@ -6,6 +6,207 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-10
+
+Sampling error, and pinned tooling.
+
+Every check in this library compared a **point estimate to a fixed threshold
+with no notion of sampling error**. `FairnessConfig.min_group_size = 30` was
+the only nod to it, and it is nowhere near enough: for a proportion near 0.5,
+n=30 carries a standard error of 0.09, so the *difference* of two such
+proportions carries one near 0.13. Against a `disparity_threshold` of 0.10,
+the verdict was noise.
+
+That is measurable, and now measured. Halve the same validation set at random
+and gate both halves, with a floor set where the model actually sits:
+
+| | Halvings that disagreed |
+|---|---|
+| point estimate (pre-0.6.0) | **9 of 10** |
+| with intervals | **0 of 10** |
+
+A gate that flips on resampling teaches people to re-run it until it passes,
+which protects nobody. `examples/06_reports_and_plots.ipynb` runs that
+comparison.
+
+### ⚠️ This release changes verdicts, and here is how
+Read this before upgrading a pinned pipeline.
+
+- **New `UNCERTAIN` flag, non-blocking.** Where a statistic's interval
+  straddles its threshold, the check reports `UNCERTAIN` instead of guessing.
+  A gate that was `PASS` may become `NEEDS_REVIEW`.
+- **Small validation sets will see a lot of it.** Against the default
+  `disparity_threshold = 0.10`, a model with *no disparity at all* reads
+  `UNCERTAIN` below roughly 500 rows: the threshold is inside the noise floor
+  whatever the model does. Above ~600 rows, clean models read clean.
+- **Thresholds with no headroom will see it too.** A model sitting exactly on
+  its `min_score` reads `UNCERTAIN` even at 8,000 rows, because you cannot
+  certify that a model clears a threshold it is sitting on.
+- **`on_uncertain="point"` reproduces the old behaviour exactly**, and still
+  reports the interval. `compute_intervals=False` turns the cost off entirely.
+- **`proxy_correlation` now needs two conditions.** An effect over
+  `proxy_corr_threshold` that does not survive Benjamini-Hochberg at
+  `proxy_fdr` becomes `UNCERTAIN` rather than `PROXY_RISK`.
+
+### Where the interval sits decides the verdict
+| Interval vs threshold | Meaning | Verdict |
+|---|---|---|
+| entirely on the failing side | the finding is real | the check's risk flag, blocking as it declares |
+| **straddles it** | *the data cannot say* | `UNCERTAIN`, non-blocking |
+| entirely on the passing side | clean | `OK` |
+
+The middle row is the addition. "The disparity might be 0.06 and might be
+0.14" is a governance conversation, not a build failure — and a report is what
+a conversation runs on, where a gate just stops a pipeline.
+
+**Configurable, because a gate nobody can overrule gets switched off.**
+`on_uncertain` takes `"review"` (default), `"block"` (precautionary: if it
+might breach, stop) or `"point"`. `"point"` deliberately does not *suppress*
+the interval — it still reaches the detail string and the metadata, because
+accepting a risk and not being told about it are different things and only the
+first is a decision.
+
+**`min_score` is a floor, so the bad side is below it.** One
+`Interval.decide(threshold, flag_when)` reads both directions, with the
+passing side inclusive and the failing side strict — matching a rule the
+checks already documented, so a unanimous sample sitting exactly on a
+threshold reads clean rather than uncertain.
+
+### Added
+- **`bdp_model_gate.uncertainty`** — `Interval`, `bootstrap`,
+  `permutation_pvalue`, `canonical_order`, and the `Uncertainty` helper each
+  check holds. Numpy only, so all of it works on a core install.
+- **`UncertaintyConfig`**, and **`FairnessConfig.proxy_fdr`**.
+- **Twelve checks report an interval**: `disparate_impact`,
+  `proxy_correlation`, `shap_subgroup_gap`, `counterfactual_flip`,
+  `equalised_odds`, `subgroup_calibration`, the four regression fairness
+  notions, `performance_thresholds` (score *and* p95 latency) and
+  `calibration`.
+- **Multiple-comparison control** on the proxy grid — a permutation p-value
+  per cell, then Benjamini-Hochberg. Permutation rather than an F-test so it
+  needs no scipy and keeps working on a core install.
+- **`stats.selection_rate_difference`**, **`stats.benjamini_hochberg`**, and
+  `stats.correlation_ratio` vectorised (11x faster, agrees with the loop it
+  replaced to 4e-16).
+- **A `lint` extra with exact pins** and `constraints-lint.txt`, separate from
+  `dev`. **A weekly non-blocking "Latest tooling" workflow**, so an upgrade
+  arrives as a decision rather than a surprise mid-release.
+- **`scripts/mutmut_decision_surface.py`** and
+  **`tests/test_documentation.py`** — see below.
+- The proxy heatmap now marks a cell the correction did not support with a
+  `?`, because a chart presenting a chance crossing exactly as it presents a
+  confirmed proxy is the more persuasive of two claims and the wrong one.
+
+### Sorting your validation set cannot change a verdict
+A textbook bootstrap would break that. `rng.integers` under a fixed seed draws
+the same *positions*, so a re-sorted frame gets a different resample and, near
+a threshold, a different answer — which is the property
+`test_row_order_does_not_change_the_verdict` has been asserting since 0.4.2.
+
+Resampling therefore happens over a canonical order derived from the rows' own
+contents, and **numeric columns are rank-transformed before hashing**. That
+second part was found by the 0.5.3 exposure invariants: normalising weights by
+their mean fixed a uniform-exposure column and broke the exposure-*unit*
+invariant instead, because `x/mean(x)` and `12x/mean(12x)` differ in the last
+bits. Dense ranks are exactly invariant under any positive monotone rescaling,
+so the ordering is robust by construction rather than by epsilon.
+
+### A degenerate resample is not evidence
+A resample can lose the information a statistic needs, and the libraries do
+not agree on how to say so. `roc_auc_score` returns NaN, which a finiteness
+check catches. **`average_precision_score` warns and returns `0.0`** — finite,
+plausible and completely fabricated. Measured on 3 positives in 400 rows,
+where about 5% of draws contain no positive: the interval read
+`[0.000, 1.000]` with those draws kept and `[1.000, 1.000]` with them
+discarded.
+
+A warning is the only signal the two share, so inside a draw a warning is now
+treated as what it is. That also took the suite's warning count from 135 back
+to 9.
+
+### Fixed
+- **`correlation_ratio` was 1.3 ms per call** on 5,000 rows, which made the
+  permutation test five seconds rather than half of one. Vectorised with
+  `bincount`; the equivalence is asserted.
+- **The permutation budget can make a grid unresolvable, silently.** With `m`
+  cells the smallest reachable q-value is about `m / bootstrap_samples`, so
+  with 26 comparisons at a 5% FDR and fewer than 520 permutations **no cell
+  can ever be significant however real the association is** — every genuine
+  proxy would have read `UNCERTAIN`, a confidently wrong verdict wearing
+  humility. `proxy_correlation` now says what is needed and falls back to
+  effect size alone.
+- **`.pre-commit-config.yaml` and CI ran different linters.** This file pinned
+  ruff `v0.13.2` while CI installed the latest, which is `v0.16.4` — two
+  linters that can disagree about the same file, with no way to tell which one
+  you were arguing with. Both exact now, and a test asserts they stay equal.
+- **`actions/checkout@v4` and `actions/setup-python@v5` were on deprecated
+  Node 20.** GitHub's annotation names exactly those two, so exactly those two
+  moved; the other actions are on a supported runtime and bumping them three
+  majors blind would have been churn with breaking-change risk.
+
+### Mutation testing now measures the decision surface
+The old framing of this item asked whether to floor the rate or the absolute
+count. Both were the wrong question, because the population was mostly noise.
+Counted with mutmut's own operator table: **12,436 mutants, of which the 1,700
+that can produce a wrong verdict are 14%.** `arg_removal` is 48%, and 2,837 of
+its 3,593 targets are required positionals whose removal raises `TypeError` —
+free kills that inflate the score. `string` is another 28%, mutating prose
+detail strings.
+
+Which is why the trend was uninterpretable: 0.5.2 killed 286 *more* mutants
+than 0.5.1 and scored 0.7 points *lower*.
+
+`scripts/mutmut_decision_surface.py` prunes the operator table to the four
+that flip a comparison, shift a threshold or invert a boolean — this project's
+stated failure mode written as mutations. 1,880 mutants, about eleven minutes,
+so the run **finishes**, which is what makes a rate comparable release to
+release. Still advisory for one release: a floor set on a single observation is
+a guess with a threshold on it.
+
+The timed run already reached only about a third of the old population, with
+*which* third decided by where the clock stopped. Focusing is not less
+coverage; it replaces an arbitrary subset with a chosen one.
+
+### The docs' code is checked against the package
+`mkdocs build --strict` catches a broken link and nothing else, so an API
+change could leave forty-odd prose snippets wrong with every build green.
+`tests/test_documentation.py` parses every python fence under `web/docs/`,
+`README.md` and `CONTRIBUTING.md`, asserts every symbol imported from the
+package exists, and asserts every config keyword and
+`config.<section>.<field>` assignment names a real field — 176 checks over 43
+snippets.
+
+Not *executed*, and the test says so: most snippets are fragments with
+`config` defined three pages earlier, and forty bespoke fixtures would rot
+faster than the thing they guard. Two genuinely illustrative snippets opt out
+through an HTML comment invisible in the rendered page, and a test bounds how
+many may.
+
+### Tests
+`tests/test_uncertainty.py` — 40 tests. The three postures on identical
+straddling data, the boundary rule, both threshold directions, the fabricated
+`0.0`, the unresolvable proxy grid, and the order-invariance the whole design
+rests on. Plus the split-stability pair in `test_invariants.py`, one of which
+asserts the property worth keeping: **every verdict that still flips under
+resampling flips between `OK` and `UNCERTAIN`, never into something that stops
+a build.**
+
+`tests/conftest.py` clamps `bootstrap_samples` to 150 for the suite — 1,000
+draws of `roc_auc` at 1.2 ms each doubled it from 40 seconds to 85 — with
+`@pytest.mark.real_bootstrap` to opt out where the resample count is part of
+what a test asserts, and a guard in `test_package.py` that the shipped default
+is still 1,000.
+
+### Changed
+- `_separation_frame` in `tests/test_calibration.py` carries 2,000 rows per
+  group, up from 500. At 250 positives the interval on a model with
+  *identical* error rates reaches past the 0.10 threshold, so every verdict in
+  those tests was noise; they are about which fairness notion a model fails,
+  not about sample size. The old size is kept in a test that asserts what it
+  actually demonstrates.
+- `mutmut` pinned exactly, because the operator pruning reaches into its
+  internals.
+
 ## [0.5.4] - 2026-09-02
 
 Prompt injection, properly.
@@ -1146,7 +1347,8 @@ in 0.4.0; example notebooks in 0.4.1.
 - `bdp-model-gate` CLI for CI/CD use.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
-[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/vanjy-eng/model-gate/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/vanjy-eng/model-gate/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/vanjy-eng/model-gate/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/vanjy-eng/model-gate/compare/v0.5.1...v0.5.2
