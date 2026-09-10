@@ -134,7 +134,7 @@ jobs:
           python-version: "3.13"
           cache: pip
       - name: Install
-        run: pip install -e ".[dev,structured]"
+        run: pip install -e ".[dev,mutation,structured]"
       - name: Run mutation testing
         # The decision surface is about 1,880 mutants against 12,436 for the
         # whole codebase — roughly eleven minutes at the observed throughput,

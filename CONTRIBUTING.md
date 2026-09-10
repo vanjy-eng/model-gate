@@ -149,9 +149,16 @@ them: 0.5.2 killed 286 more mutants than 0.5.1 and still scored 0.7 points
 lower.
 
 ```bash
+pip install -e ".[mutation]"          # needs Python 3.10+
 python scripts/mutmut_decision_surface.py run 2>&1 | tee mutation.log
 python scripts/mutation_report.py mutation.log --min-tested 200
 ```
+
+`mutation` is its own extra rather than part of `dev`, because the pin has to
+be exact — the script reaches into mutmut's internals — and **mutmut 3.7
+requires Python 3.10** while this package supports 3.9. An exact pin in `dev`
+breaks `pip install -e ".[dev]"` on the oldest interpreter in the matrix, which
+is how it broke once.
 
 **Run it through `scripts/mutmut_decision_surface.py`, not `mutmut` directly.**
 The whole-codebase pass generates 12,436 mutants, of which only 1,700 — 14% —

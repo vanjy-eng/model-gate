@@ -168,3 +168,40 @@ def test_pre_commit_pins_match_the_lint_extra():
             f"pre-commit runs a different {tool} than the lint extra pins "
             f"({version}) — they will disagree about the same file"
         )
+
+
+def test_no_exact_pin_lives_in_the_dev_extra():
+    """The invariant that would have caught a real 3.9 breakage.
+
+    `dev` is installed on every interpreter in the matrix, so an exact pin
+    there has to be installable on the oldest one — and a tool's newest
+    release usually is not. `mutmut==3.7.0` went into `dev` and broke
+    `pip install -e ".[dev]"` on Python 3.9 immediately, because mutmut 3.7
+    requires 3.10. The range it replaced had resolved to 3.3.1 there and
+    installed fine, so the problem arrived with the pin rather than with the
+    dependency.
+
+    Exact pins belong in a single-purpose extra that runs on one interpreter:
+    `lint` and `mutation`. `dev` carries ranges, and pip picks whatever the
+    running interpreter supports.
+    """
+    import tomllib
+
+    extras = tomllib.loads(PYPROJECT.read_text())["project"]["optional-dependencies"]
+    pinned = [spec for spec in extras["dev"] if "==" in spec]
+    assert not pinned, (
+        f"{pinned} pins an exact version in `dev`, which is installed on every "
+        "interpreter in the matrix. Move it to its own extra — see `lint` and "
+        "`mutation` — or use a range."
+    )
+
+
+def test_the_mutation_extra_is_not_part_of_dev():
+    """`scripts/mutmut_decision_surface.py` reaches into mutmut's internals, so
+    the pin must be exact; and mutmut 3.7 needs Python 3.10 while this package
+    supports 3.9. Those two facts together mean it cannot live in `dev`."""
+    import tomllib
+
+    extras = tomllib.loads(PYPROJECT.read_text())["project"]["optional-dependencies"]
+    assert any("mutmut" in spec for spec in extras.get("mutation", []))
+    assert not any("mutmut" in spec for spec in extras["dev"])

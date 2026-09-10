@@ -85,8 +85,24 @@ dev = [
     "hypothesis>=6.100,<7.0",
     "matplotlib>=3.6,<4.0",
     "seaborn>=0.13,<0.15",
-    "mutmut==3.7.0",
     "pyyaml>=6.0,<7.0",
+]
+# Mutation testing, and its own extra for two reasons.
+#
+# `scripts/mutmut_decision_surface.py` reaches into mutmut's internals to
+# prune the operator table, so the version has to be exact — a range would let
+# a minor release rename the table and turn the pruning into a silent no-op.
+#
+# And an exact pin cannot live in `dev`: **mutmut 3.7 requires Python 3.10**,
+# while this package supports 3.9, so pinning it there breaks `pip install
+# -e ".[dev]"` on the oldest interpreter in the matrix. The range that used to
+# be there resolved to 3.3.1 on 3.9 and installed fine, which is why the
+# problem arrived with the pin rather than with the dependency.
+#
+# Nothing in the test matrix needs it: mutation testing runs in one advisory
+# job, on one interpreter, and locally when someone is hardening an area.
+mutation = [
+    "mutmut==3.7.0",
 ]
 
 [project.urls]
