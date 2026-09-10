@@ -75,8 +75,8 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         ErrorParityCheck(config.fairness, config.uncertainty),
         CalibrationParityCheck(config.fairness, config.uncertainty),
         LossRatioParityCheck(config.fairness, config.uncertainty),
-        PerformanceThresholdCheck(config.performance),
-        CalibrationCheck(config.performance),
+        PerformanceThresholdCheck(config.performance, config.uncertainty),
+        CalibrationCheck(config.performance, config.uncertainty),
         # The pricing measures. Level, shape and ordering are three
         # independent ways for a premium model to be wrong, and an error
         # metric collapses all three into one number that hides each.

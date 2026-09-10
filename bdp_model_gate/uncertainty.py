@@ -46,6 +46,7 @@ CSV must not change whether a model ships.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -56,6 +57,11 @@ from ._logging import get_logger
 from .exceptions import GateConfigurationError
 
 logger = get_logger("uncertainty")
+
+#: Which side of the threshold is the *bad* side.
+ABOVE = "above"  #: a gap, an error, a disparity — flag when it exceeds
+BELOW = "below"  #: a score floor such as `min_score` — flag when it falls short
+DIRECTIONS = (ABOVE, BELOW)
 
 #: What to do when the interval straddles the threshold.
 REVIEW = "review"  #: route to a human — the default
@@ -101,14 +107,32 @@ class Interval:
     def width(self) -> float:
         return self.high - self.low
 
-    def straddles(self, threshold: float) -> bool:
-        """Whether the threshold falls inside the interval — the case where
-        the data cannot say which side of it the truth is on."""
-        return self.low <= threshold <= self.high
+    def decide(self, threshold: float, flag_when: str) -> str:
+        """`"bad"`, `"fine"` or `"uncertain"` for this threshold.
 
-    def exceeds(self, threshold: float) -> bool:
-        """Whether the *whole* interval sits above the threshold."""
-        return self.low > threshold
+        The boundary handling is the fiddly part, and it is fixed by a rule
+        that was already documented elsewhere: **a value exactly equal to the
+        threshold passes.** `PerformanceThresholdCheck` has always said a
+        score equal to `min_score` clears it, and a gap equal to
+        `disparity_threshold` is not a finding.
+
+        So the passing side is inclusive and the failing side is strict, and a
+        zero-width interval sitting exactly on the threshold reads `"fine"`
+        rather than `"uncertain"`. A unanimous sample is not an uncertain one
+        — reporting doubt there would be as wrong as reporting a fabricated
+        certainty anywhere else.
+        """
+        if flag_when == BELOW:
+            if self.low >= threshold:
+                return "fine"
+            if self.high < threshold:
+                return "bad"
+        else:
+            if self.high <= threshold:
+                return "fine"
+            if self.low > threshold:
+                return "bad"
+        return "uncertain"
 
     def as_metadata(self) -> dict[str, Any]:
         return {
@@ -196,11 +220,24 @@ def bootstrap(
     for _ in range(max(1, int(samples))):
         resample = positions[rng.integers(0, n, size=n)]
         try:
-            value = float(statistic(resample))
+            # Warnings are errors *inside a draw*, and that is a correctness
+            # rule rather than tidiness. A resample can lose the information a
+            # statistic needs — a protected group, a whole class — and the
+            # libraries do not agree on how to say so.
+            # `roc_auc_score` returns NaN, which `isfinite` catches.
+            # `average_precision_score` warns and returns **0.0**, which is
+            # finite, plausible, and completely fabricated: left in, it drags
+            # the lower bound of every interval to zero and manufactures
+            # uncertainty that is not in the data.
+            #
+            # A warning is the only signal both cases share, so it is treated
+            # as what it is: this draw is not evidence. If every draw warns
+            # there is no interval, and the check says so rather than
+            # inventing one.
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                value = float(statistic(resample))
         except Exception:
-            # A resample can be degenerate — a protected group missing
-            # entirely, a constant column. Skip it and count what remains,
-            # so the caller can see how much evidence the range rests on.
             continue
         if np.isfinite(value):
             draws.append(value)
@@ -225,12 +262,6 @@ def bootstrap(
         level=level,
         samples=len(draws),
     )
-
-
-#: Which side of the threshold is the *bad* side.
-ABOVE = "above"  #: a gap, an error, a disparity — flag when it exceeds
-BELOW = "below"  #: a score floor such as `min_score` — flag when it falls short
-DIRECTIONS = (ABOVE, BELOW)
 
 
 @dataclass(frozen=True)
@@ -351,21 +382,17 @@ def resolve(
     if interval is None:
         return (risk_flag if breached else "OK"), blocking, ""
 
-    if flag_when == ABOVE:
-        certainly_bad, certainly_fine = interval.low > threshold, interval.high < threshold
-        bad_side, good_side = "above", "below"
-    else:
-        certainly_bad, certainly_fine = interval.high < threshold, interval.low > threshold
-        bad_side, good_side = "below", "above"
+    decision = interval.decide(threshold, flag_when)
+    bad_side, good_side = ("above", "below") if flag_when == ABOVE else ("below", "above")
 
-    if certainly_bad:
+    if decision == "bad":
         return (
             risk_flag,
             blocking,
             f" — the whole {interval.level:.0%} interval sits {bad_side} {threshold:.3f}",
         )
 
-    if certainly_fine:
+    if decision == "fine":
         return "OK", blocking, f" — the whole interval sits {good_side} {threshold:.3f}"
 
     # Straddling. Which *direction* the doubt runs in matters to the reader:

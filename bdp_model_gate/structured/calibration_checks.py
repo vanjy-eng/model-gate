@@ -22,15 +22,17 @@ picking one on the user's behalf.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from .._logging import get_logger
 from ..calibration import brier_decomposition, calibration_curve, expected_calibration_error
 from ..classes import favourable_mask, resolve_favourable
-from ..config import FairnessConfig, PerformanceConfig
+from ..config import FairnessConfig, PerformanceConfig, UncertaintyConfig
 from ..core.base import BaseCheck, CheckResult
 from ..groups import group_series, iter_protected
 from ..metrics import to_class_labels
 from ..task import CLASSIFICATION_TASKS, MULTICLASS, resolve_task
+from ..uncertainty import Uncertainty
 
 logger = get_logger("calibration_checks")
 
@@ -106,8 +108,13 @@ class CalibrationCheck(BaseCheck):
     blocking = True
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: PerformanceConfig | None = None):
+    def __init__(
+        self,
+        config: PerformanceConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or PerformanceConfig()
+        self.uncertainty = Uncertainty(uncertainty)
 
     def run(self, context) -> list[CheckResult]:
         task = resolve_task(context)
@@ -128,7 +135,26 @@ class CalibrationCheck(BaseCheck):
         )
         parts = brier_decomposition(actuals, probabilities, n_bins=self.config.n_calibration_bins)
 
-        flag = "OK" if ece <= self.config.max_ece else "CALIBRATION_RISK"
+        def calibration_error(positions):
+            return expected_calibration_error(
+                np.asarray(actuals)[positions],
+                np.asarray(probabilities)[positions],
+                n_bins=self.config.n_calibration_bins,
+                strategy=self.config.calibration_strategy,
+            )
+
+        interval = self.uncertainty.interval(
+            calibration_error,
+            pd.DataFrame({"actual": np.asarray(actuals), "p": np.asarray(probabilities)}),
+        )
+        verdict = self.uncertainty.verdict(
+            interval,
+            self.config.max_ece,
+            point=ece,
+            risk_flag="CALIBRATION_RISK",
+            blocking=self.blocking,
+        )
+        flag = verdict.flag
         direction = ""
         if flag != "OK":
             mean_predicted = float(np.mean(probabilities))
@@ -144,17 +170,19 @@ class CalibrationCheck(BaseCheck):
                 self.category,
                 flag,
                 detail=(
-                    f"expected calibration error={ece:.4f} (max {self.config.max_ece})"
+                    f"expected calibration error={self.uncertainty.measured(interval, ece)} "
+                    f"(max {self.config.max_ece})"
                     f"{direction}; reliability={parts['reliability']:.4f}, "
-                    f"resolution={parts['resolution']:.4f}"
+                    f"resolution={parts['resolution']:.4f}{verdict.note}"
                 ),
-                blocking=self.blocking,
+                blocking=verdict.blocking,
                 metadata={
                     "ece": round(ece, 5),
                     "threshold": self.config.max_ece,
                     "n_bins": self.config.n_calibration_bins,
                     "strategy": self.config.calibration_strategy,
                     **{k: round(v, 5) for k, v in parts.items()},
+                    **verdict.metadata,
                 },
             )
         ]

@@ -132,3 +132,17 @@ def test_no_runtime_pep604_without_future_import():
         f"{offenders} use PEP 604 unions without `from __future__ import annotations`, "
         "which is an import-time TypeError on Python 3.9"
     )
+
+
+def test_the_bootstrap_default_is_not_the_one_the_suite_runs_with():
+    """`tests/conftest.py` lowers `bootstrap_samples` to keep the suite quick.
+    That is a test-speed decision and must not leak into the library: a
+    governance tool should not ship a 150-draw percentile interval because it
+    made someone's test run faster.
+    """
+    import inspect
+
+    from bdp_model_gate.config import UncertaintyConfig
+
+    declared = inspect.signature(UncertaintyConfig).parameters["bootstrap_samples"].default
+    assert declared == 1000, "the shipped default changed — was that deliberate?"

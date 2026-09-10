@@ -16,6 +16,8 @@ accepted it must be able to say so without switching the check off.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -351,15 +353,42 @@ def test_the_default_suite_wires_the_uncertainty_config_through():
 # --------------------------------------------------------------------------
 
 
-def test_straddling_is_inclusive_at_both_ends():
-    """A threshold exactly on an endpoint is not decided by the data. An
-    off-by-one here silently changes every borderline verdict."""
+def test_the_boundary_follows_the_rule_the_checks_already_documented():
+    """A value exactly equal to the threshold passes, so the passing side is
+    inclusive and the failing side is strict.
+
+    `PerformanceThresholdCheck` has always said a score equal to `min_score`
+    clears it, and a gap equal to `disparity_threshold` is not a finding. The
+    interval has to agree, or an off-by-one silently changes every borderline
+    verdict.
+    """
     interval = Interval(point=0.08, low=0.05, high=0.15, level=0.95, samples=300)
-    assert interval.straddles(0.05) and interval.straddles(0.15)
-    assert interval.straddles(0.10)
-    assert not interval.straddles(0.16)
-    assert interval.exceeds(0.04) and not interval.exceeds(0.05)
+
+    # A ceiling. Flag when the metric exceeds it.
+    assert interval.decide(0.15, ABOVE) == "fine"  # 0.15 exactly is not a breach
+    assert interval.decide(0.16, ABOVE) == "fine"
+    assert interval.decide(0.10, ABOVE) == "uncertain"
+    assert interval.decide(0.05, ABOVE) == "uncertain"  # low == threshold, not yet strict
+    assert interval.decide(0.04, ABOVE) == "bad"
+
+    # A floor. Flag when the metric falls short.
+    assert interval.decide(0.05, BELOW) == "fine"  # 0.05 exactly clears the floor
+    assert interval.decide(0.04, BELOW) == "fine"
+    assert interval.decide(0.10, BELOW) == "uncertain"
+    assert interval.decide(0.16, BELOW) == "bad"
+
     assert interval.width == pytest.approx(0.10)
+
+
+def test_a_unanimous_sample_is_not_an_uncertain_one():
+    """The case that caught the original boundary rule: a perfect model against
+    `min_score=1.0` gives a zero-width interval sitting exactly on the
+    threshold. Reporting doubt there would be as wrong as reporting a
+    fabricated certainty anywhere else."""
+    exact = Interval(point=1.0, low=1.0, high=1.0, level=0.95, samples=300)
+    assert exact.decide(1.0, BELOW) == "fine"
+    assert exact.decide(1.0, ABOVE) == "fine"
+    assert resolve(exact, 1.0, point=1.0, risk_flag="X", flag_when=BELOW)[0] == "OK"
 
 
 def test_resolve_falls_back_to_the_point_estimate_without_an_interval():
@@ -414,3 +443,72 @@ def test_the_same_interval_reads_opposite_ways_on_the_two_directions():
 def test_an_unknown_direction_is_refused():
     with pytest.raises(GateConfigurationError, match="flag_when"):
         resolve(None, 0.1, point=0.2, risk_flag="X", flag_when="sideways")
+
+
+# --------------------------------------------------------------------------
+# A degenerate resample is not evidence
+# --------------------------------------------------------------------------
+
+
+def test_a_warning_inside_a_draw_discards_it():
+    """The correctness rule that makes warnings-as-errors non-negotiable here.
+
+    A resample can lose the information a statistic needs, and the libraries do
+    not agree on how to say so. `roc_auc_score` returns NaN, which `isfinite`
+    catches. `average_precision_score` **warns and returns 0.0** — finite,
+    plausible and completely fabricated.
+
+    Left in, those zeros drag the lower bound of the interval to zero and
+    manufacture uncertainty that is not in the data. Measured on 3 positives
+    in 400 rows, where roughly 5% of resamples contain no positive at all:
+    the interval is `[0.000, 1.000]` if the draws are kept and
+    `[1.000, 1.000]` if they are discarded.
+    """
+    pytest.importorskip("sklearn")
+    from sklearn.metrics import average_precision_score
+
+    rng = np.random.default_rng(4)
+    n = 400
+    y = np.zeros(n, dtype=int)
+    y[rng.choice(n, 3, replace=False)] = 1
+    p = np.clip(y * 0.6 + rng.random(n) * 0.4, 0.001, 0.999)
+
+    interval = bootstrap(
+        lambda positions: float(average_precision_score(y[positions], p[positions])),
+        pd.DataFrame({"y": y, "p": p}),
+        samples=600,
+    )
+    assert interval is not None
+    assert interval.low == pytest.approx(1.0), "a fabricated 0.0 reached the interval"
+    assert interval.samples < 600, "the degenerate draws should have been discarded"
+
+
+def test_the_kept_draw_count_is_reported():
+    """How much evidence the range rests on is part of the finding, not an
+    implementation detail — a range built on 571 draws of a requested 600 is
+    telling you something about the data."""
+    frame = pd.DataFrame({"a": np.arange(200.0)})
+    calls = {"n": 0}
+
+    def warns_sometimes(positions):
+        calls["n"] += 1
+        if calls["n"] % 3 == 0:
+            warnings.warn("degenerate", UserWarning, stacklevel=1)
+        return 0.5
+
+    interval = bootstrap(warns_sometimes, frame, samples=300)
+    assert interval is not None
+    assert 150 < interval.samples < 300
+    assert interval.as_metadata()["bootstrap_samples"] == interval.samples
+
+
+def test_a_statistic_that_always_warns_yields_no_interval():
+    """Safe degradation: the check reports its point estimate and says the
+    interval was unavailable, rather than inventing one from nothing."""
+    frame = pd.DataFrame({"a": np.arange(200.0)})
+
+    def always_warns(positions):
+        warnings.warn("degenerate", UserWarning, stacklevel=1)
+        return 0.5
+
+    assert bootstrap(always_warns, frame, samples=100) is None

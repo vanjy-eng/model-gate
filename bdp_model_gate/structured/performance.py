@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from .._logging import get_logger
 from ..actuarial import exposure_array
-from ..config import PerformanceConfig
+from ..config import PerformanceConfig, UncertaintyConfig
 from ..core.base import BaseCheck, CheckResult
 from ..exceptions import GateConfigurationError
 from ..metrics import (
@@ -19,6 +20,7 @@ from ..metrics import (
     validate_metric,
 )
 from ..task import MULTICLASS, resolve_task
+from ..uncertainty import ABOVE, BELOW, Uncertainty
 
 logger = get_logger("performance")
 
@@ -40,8 +42,13 @@ class PerformanceThresholdCheck(BaseCheck):
     category = "performance"
     blocking = True
 
-    def __init__(self, config: PerformanceConfig | None = None):
+    def __init__(
+        self,
+        config: PerformanceConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or PerformanceConfig()
+        self.uncertainty = Uncertainty(uncertainty)
         # Fail at construction time on a typo'd metric name, rather than
         # partway through a gate run. Dependency availability is checked
         # lazily in _score(), so building the suite never needs sklearn.
@@ -64,15 +71,26 @@ class PerformanceThresholdCheck(BaseCheck):
             class_order=getattr(self._context, "class_order", None),
             exposure=exposure_array(self._context),
         )
+        return metric, float(metric.fn(y_true, self._as_metric_expects(y_pred, metric, task)))
+
+    def _as_metric_expects(self, y_pred: Any, metric: ResolvedMetric, task: str) -> Any:
+        """`y_pred` in the shape the metric wants.
+
+        Split out of `_score` so the bootstrap resamples exactly what the
+        point estimate scored — binarised once, not once per draw, and never
+        by a second code path that could round differently.
+        """
         if not metric.needs_hard_labels:
-            y_pred_eval = y_pred
-        elif task == MULTICLASS:
+            return y_pred
+        if task == MULTICLASS:
             # Binarising at a 0.5 threshold is meaningless with more than two
             # classes; reduce a probability matrix by argmax instead.
-            y_pred_eval = to_class_labels(y_pred, getattr(self._context, "class_order", None))
-        else:
-            y_pred_eval = to_hard_labels(y_pred, self.config.decision_threshold)
-        return metric, float(metric.fn(y_true, y_pred_eval))
+            return to_class_labels(y_pred, getattr(self._context, "class_order", None))
+        return to_hard_labels(y_pred, self.config.decision_threshold)
+
+    def _prepared(self, context, metric: ResolvedMetric, task: str):
+        """`(y_true, y_pred)` as the metric will see them, for the bootstrap."""
+        return context.y_true, self._as_metric_expects(context.y_pred, metric, task)
 
     def _threshold_for(self, metric: ResolvedMetric) -> tuple[float, str, bool]:
         """Picks the threshold that matches the metric's direction.
@@ -95,8 +113,41 @@ class PerformanceThresholdCheck(BaseCheck):
     def _score_result(self, context, task: str) -> CheckResult:
         metric, score = self._score(context.y_true, context.y_pred, task)
         threshold, threshold_field, higher_passes = self._threshold_for(metric)
-        passed = score >= threshold if higher_passes else score <= threshold
         bound = "min" if higher_passes else "max"
+
+        # `min_score` is a floor, so the *bad* side is below it. Reading the
+        # interval the same way round as a disparity ceiling would invert
+        # every verdict here — see `uncertainty.resolve`.
+        flag_when = BELOW if higher_passes else ABOVE
+        y_true, y_pred_eval = self._prepared(context, metric, task)
+        interval = None
+        if y_pred_eval is not None:
+            arrays = {"y_true": np.asarray(y_true)}
+            evaluated = np.asarray(y_pred_eval)
+            if evaluated.ndim == 1:
+                # A probability matrix has no one-column-per-row form to hash,
+                # and re-deriving it per resample would cost more than the
+                # interval is worth. Multiclass reports its point estimate.
+                arrays["y_pred"] = evaluated
+                exposure = exposure_array(context)
+                if exposure is not None:
+                    arrays["exposure"] = exposure
+
+                def scored(positions, metric=metric):
+                    return float(
+                        metric.fn(arrays["y_true"][positions], arrays["y_pred"][positions])
+                    )
+
+                interval = self.uncertainty.interval(scored, pd.DataFrame(arrays))
+
+        verdict = self.uncertainty.verdict(
+            interval,
+            threshold,
+            point=score,
+            risk_flag="PERFORMANCE_RISK",
+            blocking=self.blocking,
+            flag_when=flag_when,
+        )
 
         notes = []
         if metric.is_fallback:
@@ -121,12 +172,17 @@ class PerformanceThresholdCheck(BaseCheck):
             metric.is_fallback,
         )
 
+        measured = (
+            f"{score:.4f} {interval.describe().split(' at ')[0].split(' ', 1)[1]}"
+            if interval is not None
+            else f"{score:.4f}"
+        )
         return CheckResult(
             self.name,
             self.category,
-            "OK" if passed else "PERFORMANCE_RISK",
-            detail=f"{metric.name}={score:.4f} ({bound} {threshold}){suffix}",
-            blocking=self.blocking,
+            verdict.flag,
+            detail=(f"{metric.name}={measured} ({bound} {threshold}){suffix}{verdict.note}"),
+            blocking=verdict.blocking,
             metadata={
                 "metric_kind": "score",
                 "metric": metric.name,
@@ -136,6 +192,7 @@ class PerformanceThresholdCheck(BaseCheck):
                 "greater_is_better": metric.greater_is_better,
                 "metric_is_fallback": metric.is_fallback,
                 "exposure_weighted": metric.exposure_weighted,
+                **verdict.metadata,
             },
         )
 
@@ -217,20 +274,44 @@ class PerformanceThresholdCheck(BaseCheck):
             results.append(self._score_result(context, task))
 
         if context.latencies_ms is not None:
-            p95 = float(np.percentile(context.latencies_ms, 95))
-            flag = "OK" if p95 <= self.config.max_latency_ms_p95 else "PERFORMANCE_RISK"
+            latencies = np.asarray(context.latencies_ms, dtype=float)
+            p95 = float(np.percentile(latencies, 95))
+            # A p95 from fifty timings is a noisy number, and 205 ms against a
+            # 200 ms budget is the same coin-flip as an 0.11 disparity against
+            # a 0.10 ceiling. Its own frame, because latencies are a benchmark
+            # sample and are not row-aligned to anything.
+            interval = self.uncertainty.interval(
+                lambda positions: float(np.percentile(latencies[positions], 95)),
+                pd.DataFrame({"latency_ms": latencies}),
+            )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.max_latency_ms_p95,
+                point=p95,
+                risk_flag="PERFORMANCE_RISK",
+                blocking=self.blocking,
+            )
+            reported = (
+                f"{p95:.2f}ms [{interval.low:.2f}, {interval.high:.2f}]"
+                if interval is not None
+                else f"{p95:.2f}ms"
+            )
             results.append(
                 CheckResult(
                     self.name,
                     self.category,
-                    flag,
-                    detail=f"p95 latency={p95:.2f}ms (max {self.config.max_latency_ms_p95}ms)",
-                    blocking=self.blocking,
+                    verdict.flag,
+                    detail=(
+                        f"p95 latency={reported} "
+                        f"(max {self.config.max_latency_ms_p95}ms){verdict.note}"
+                    ),
+                    blocking=verdict.blocking,
                     metadata={
                         "metric_kind": "latency",
                         "metric": "latency_p95_ms",
                         "value": round(p95, 2),
                         "threshold": self.config.max_latency_ms_p95,
+                        **verdict.metadata,
                     },
                 )
             )
