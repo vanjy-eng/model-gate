@@ -146,3 +146,25 @@ def test_the_bootstrap_default_is_not_the_one_the_suite_runs_with():
 
     declared = inspect.signature(UncertaintyConfig).parameters["bootstrap_samples"].default
     assert declared == 1000, "the shipped default changed — was that deliberate?"
+
+
+def test_pre_commit_pins_match_the_lint_extra():
+    """A developer running pre-commit and the same developer reading a CI
+    failure must be looking at the same linter.
+
+    Before 0.6.0 they were not: `.pre-commit-config.yaml` pinned ruff v0.13.2
+    while CI installed the latest, which was v0.16.4 — two linters that can
+    disagree about the same file, with no way to tell which one you were
+    arguing with. Both are now exact, and this asserts they stay equal.
+    """
+    pyproject = PYPROJECT.read_text()
+    pre_commit = (PYPROJECT.parent / ".pre-commit-config.yaml").read_text()
+
+    for tool in ("ruff", "mypy"):
+        pinned = re.search(rf'^\s*"{tool}==([\d.]+)"', pyproject, re.M)
+        assert pinned, f"the lint extra no longer pins {tool} exactly"
+        version = pinned.group(1)
+        assert f"rev: v{version}" in pre_commit, (
+            f"pre-commit runs a different {tool} than the lint extra pins "
+            f"({version}) — they will disagree about the same file"
+        )

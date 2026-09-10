@@ -307,8 +307,16 @@ confusing red build months later on an unrelated PR.
   before invoking the CLI, which means **pinning mutmut exactly** — currently
   unpinned, and it belongs with the tooling work above anyway.
 
-  Decision still open: whether to take this or keep the whole-population
-  number. Nothing else in this release depends on it.
+  **Taken in 0.6.0.** `scripts/mutmut_decision_surface.py` prunes the operator
+  table before mutmut generates anything, and CI runs it in place of the full
+  pass: 1,880 mutants rather than 12,436, about eleven minutes, so the run
+  *finishes*. Still `continue-on-error` for one release so the first few
+  numbers can be read before one of them becomes a gate — a floor set on a
+  single observation is a guess with a threshold on it.
+
+  mutmut is pinned exactly (`mutmut==3.7.0`) because the pruning reaches into
+  its internals, and the script refuses to run if the operator table it
+  expects has moved.
 - **Executed documentation code blocks.** The prose snippets under `web/docs/`
   are not run by anything, so an API change can leave them wrong while
   `mkdocs build --strict` still passes — the generated API reference and the

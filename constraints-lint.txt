@@ -1,0 +1,23 @@
+# Exact versions for a lint run, transitive dependencies included.
+#
+# `pyproject.toml`'s `lint` extra pins ruff and mypy exactly, which is most of
+# the problem. This file closes the rest of it: mypy's own behaviour depends on
+# the stub packages it resolves, so `pandas-stubs` moving can change a type
+# error on unchanged code just as surely as mypy moving can.
+#
+# Regenerate after changing the `lint` extra:
+#
+#   python -m venv /tmp/lintprobe
+#   /tmp/lintprobe/bin/pip install "ruff==X" "mypy==Y" pandas-stubs types-PyYAML
+#   /tmp/lintprobe/bin/pip freeze | sort > constraints-lint.txt
+#
+# Used as:  pip install -e ".[lint]" -c constraints-lint.txt
+librt==0.15.0
+mypy==1.20.2
+mypy_extensions==1.1.0
+numpy==2.5.3
+pandas-stubs==3.0.5.260730
+pathspec==1.1.1
+ruff==0.16.4
+types-PyYAML==6.0.12.20260906
+typing_extensions==4.16.0

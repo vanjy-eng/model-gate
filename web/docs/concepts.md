@@ -75,6 +75,7 @@ So `validation` is its own category, it **blocks**, and it is reported
 The second is a prior question. If it fires, nothing underneath it means what
 it appears to mean.
 
+<!-- pseudo-code: illustrative, not runnable -->
 ```python
 context = StructuredGateContext(
     model=model,

@@ -1,5 +1,10 @@
 # Install with: pip install pre-commit && pre-commit install
-# Mirrors the checks in .github/workflows/ci.yml so failures surface locally.
+#
+# The revs below must match the exact pins in `pyproject.toml`'s `lint` extra.
+# Until 0.6.0 they did not: this file pinned ruff v0.13.2 while CI installed
+# whatever was latest, so a developer running pre-commit and the same developer
+# reading a CI failure could be looking at two different linters disagreeing
+# about the same file. `tests/test_package.py` now asserts the two agree.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -14,14 +19,14 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.13.2
+    rev: v0.16.4
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+    rev: v1.20.2
     hooks:
       - id: mypy
         files: ^bdp_model_gate/

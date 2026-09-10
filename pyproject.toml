@@ -60,19 +60,33 @@ yaml = [
 toml = [
     "tomli>=2.0,<3.0; python_version < '3.11'",
 ]
+# Linters and the type checker, pinned **exactly** and kept out of `dev`.
+#
+# An unpinned linter changes its verdict on unchanged code, so a release
+# months from now goes red on a pull request that touched nothing near the
+# complaint. That has a real cost beyond the confusion: the reflex it teaches
+# is to widen the ignore list.
+#
+# Separate from `dev` because the CI matrix installs `dev` on five
+# interpreters and only ever runs pytest with it — the linters run once, on
+# one version, in one job. Pair with `constraints-lint.txt` for the transitive
+# set: mypy's answers depend on the stubs it resolves, so `pandas-stubs`
+# moving can turn a clean run red just as surely as mypy moving can.
+lint = [
+    "ruff==0.16.4",
+    "mypy==1.20.2",
+    "pandas-stubs",
+    "types-PyYAML>=6.0,<7.0",
+]
 dev = [
     "pytest>=7.0,<9.0",
     "pytest-cov>=4.1,<6.0",
     "build>=1.0,<2.0",
-    "mypy>=1.8,<2.0",
-    "ruff>=0.4,<1.0",
-    "pandas-stubs",
     "hypothesis>=6.100,<7.0",
     "matplotlib>=3.6,<4.0",
     "seaborn>=0.13,<0.15",
-    "mutmut>=3.0,<4.0",
+    "mutmut==3.7.0",
     "pyyaml>=6.0,<7.0",
-    "types-PyYAML>=6.0,<7.0",
 ]
 
 [project.urls]
