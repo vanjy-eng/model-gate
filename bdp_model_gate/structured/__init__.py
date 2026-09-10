@@ -64,13 +64,13 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         FeatureDriftCheck(config.validation),
         ProxyCorrelationCheck(config.fairness, config.uncertainty),
         DisparateImpactCheck(config.fairness, config.uncertainty),
-        ShapSubgroupCheck(config.fairness),
-        CounterfactualFlipCheck(config.fairness),
+        ShapSubgroupCheck(config.fairness, config.uncertainty),
+        CounterfactualFlipCheck(config.fairness, uncertainty=config.uncertainty),
         # Separation and sufficiency. Reported alongside demographic parity
         # because the three are mutually incompatible — presenting only one
         # would make the choice silently.
-        EqualisedOddsCheck(config.fairness),
-        SubgroupCalibrationCheck(config.fairness),
+        EqualisedOddsCheck(config.fairness, config.uncertainty),
+        SubgroupCalibrationCheck(config.fairness, config.uncertainty),
         GroupMeanGapCheck(config.fairness, config.uncertainty),
         ErrorParityCheck(config.fairness, config.uncertainty),
         CalibrationParityCheck(config.fairness, config.uncertainty),

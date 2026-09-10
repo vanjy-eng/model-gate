@@ -592,8 +592,13 @@ class ShapSubgroupCheck(BaseCheck):
     blocking = False
     supported_tasks = ALL_TASKS  # SHAP contributions are defined for any output
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
 
     @staticmethod
     def _build_explainer(shap_module, model, X, adapter=None):
@@ -757,32 +762,61 @@ class ShapSubgroupCheck(BaseCheck):
 
         results = []
         for attr in context.protected_df.columns:
+            groups = context.protected_df[attr].to_numpy()
             for feature in context.X.columns:
-                group_means = shap_df[feature].groupby(context.protected_df[attr].values).mean()
+                contributions = shap_df[feature].to_numpy(dtype=float)
+                group_means = shap_df[feature].groupby(groups).mean()
                 gap = float(group_means.max() - group_means.min())
                 relative_gap = abs(gap) / shap_scale
-                if relative_gap > self.config.shap_gap_threshold:
-                    results.append(
-                        CheckResult(
-                            self.name,
-                            self.category,
-                            "SUBGROUP_IMPACT_RISK",
-                            detail=(
-                                f"{feature} SHAP contribution gap across {attr}="
-                                f"{gap:,.3f} — {relative_gap:.0%} of the mean absolute "
-                                f"contribution {shap_scale:,.3f}"
-                            ),
-                            blocking=self.blocking,
-                            metadata={
-                                "feature": feature,
-                                "protected_attr": attr,
-                                "shap_gap": round(gap, 4),
-                                "relative_gap": round(relative_gap, 4),
-                                "shap_scale": round(shap_scale, 4),
-                                "threshold": self.config.shap_gap_threshold,
-                            },
-                        )
+
+                # The SHAP matrix is already computed, so resampling its rows
+                # costs nothing more than arithmetic — no re-explaining, which
+                # would be minutes rather than milliseconds.
+                def spread(positions, contributions=contributions, groups=groups):
+                    per_group = (
+                        pd.Series(contributions[positions]).groupby(groups[positions]).mean()
                     )
+                    if per_group.size < 2:
+                        return 0.0
+                    return abs(float(per_group.max() - per_group.min())) / shap_scale
+
+                interval = self.uncertainty.interval(
+                    spread,
+                    pd.DataFrame({"contribution": contributions, "group": groups}),
+                )
+                verdict = self.uncertainty.verdict(
+                    interval,
+                    self.config.shap_gap_threshold,
+                    point=relative_gap,
+                    risk_flag="SUBGROUP_IMPACT_RISK",
+                    blocking=self.blocking,
+                )
+                if verdict.flag == "OK":
+                    continue
+                results.append(
+                    CheckResult(
+                        self.name,
+                        self.category,
+                        verdict.flag,
+                        detail=(
+                            f"{feature} SHAP contribution gap across {attr}="
+                            f"{gap:,.3f} — "
+                            f"{self.uncertainty.measured(interval, relative_gap)} of the "
+                            f"mean absolute contribution {shap_scale:,.3f} "
+                            f"(max {self.config.shap_gap_threshold:.0%}){verdict.note}"
+                        ),
+                        blocking=verdict.blocking,
+                        metadata={
+                            "feature": feature,
+                            "protected_attr": attr,
+                            "shap_gap": round(gap, 4),
+                            "relative_gap": round(relative_gap, 4),
+                            "shap_scale": round(shap_scale, 4),
+                            "threshold": self.config.shap_gap_threshold,
+                            **verdict.metadata,
+                        },
+                    )
+                )
         return results or [
             CheckResult(
                 self.name,
@@ -806,9 +840,15 @@ class CounterfactualFlipCheck(BaseCheck):
     # the mean prediction shift, which GroupMeanGapCheck already covers.
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: FairnessConfig | None = None, n_samples: int = 200):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        n_samples: int = 200,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
         self.n_samples = n_samples
+        self.uncertainty = Uncertainty(uncertainty)
 
     @staticmethod
     def _favourable_proba(adapter, frame, context):
@@ -877,23 +917,45 @@ class CounterfactualFlipCheck(BaseCheck):
                 flipped = sample.copy()
                 flipped[attr] = val
                 flipped_preds = self._favourable_proba(adapter, flipped, context)
-                shift = float(np.mean(np.abs(flipped_preds - base_preds)))
-                flag = (
-                    "COUNTERFACTUAL_RISK"
-                    if shift > self.config.counterfactual_shift_threshold
-                    else "OK"
+                per_row = np.abs(np.asarray(flipped_preds) - np.asarray(base_preds))
+                shift = float(np.mean(per_row))
+
+                # Bootstrapped over the *scored subsample*, not the full frame:
+                # the interval has to describe the rows the point estimate came
+                # from, and re-scoring more rows would cost another pass through
+                # the model. `stable_sample` is content-addressed, so which rows
+                # those are does not depend on the input order.
+                def mean_shift(positions, per_row=per_row) -> float:
+                    return float(np.mean(per_row[positions]))
+
+                interval = self.uncertainty.interval(mean_shift, pd.DataFrame({"shift": per_row}))
+                verdict = self.uncertainty.verdict(
+                    interval,
+                    self.config.counterfactual_shift_threshold,
+                    point=shift,
+                    risk_flag="COUNTERFACTUAL_RISK",
+                    blocking=self.blocking,
                 )
                 results.append(
                     CheckResult(
                         self.name,
                         self.category,
-                        flag,
-                        detail=f"flipping {attr} to {val!r} shifts predictions by {shift:.4f} on average",
-                        blocking=self.blocking,
+                        verdict.flag,
+                        detail=(
+                            f"flipping {attr} to {val!r} shifts predictions by "
+                            f"{self.uncertainty.measured(interval, shift)} on average "
+                            f"across {len(per_row)} sampled row(s) "
+                            f"(max {self.config.counterfactual_shift_threshold})"
+                            f"{verdict.note}"
+                        ),
+                        blocking=verdict.blocking,
                         metadata={
                             "protected_attr": attr,
                             "flipped_to": str(val),
                             "avg_prediction_shift": round(shift, 4),
+                            "threshold": self.config.counterfactual_shift_threshold,
+                            "n_rows_scored": int(len(per_row)),
+                            **verdict.metadata,
                         },
                     )
                 )

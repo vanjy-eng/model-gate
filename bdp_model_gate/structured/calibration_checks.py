@@ -287,8 +287,13 @@ class SubgroupCalibrationCheck(BaseCheck):
     blocking = False
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
 
     def run(self, context) -> list[CheckResult]:
         if context.protected_df is None or context.protected_df.empty:
@@ -332,11 +337,45 @@ class SubgroupCalibrationCheck(BaseCheck):
             worst = max(per_group, key=lambda g: per_group[g])
             best = min(per_group, key=lambda g: per_group[g])
             gap = per_group[worst] - per_group[best]
-            flag = (
-                "SUBGROUP_CALIBRATION_RISK"
-                if gap > self.config.subgroup_calibration_threshold
-                else "OK"
+
+            # The group set is fixed from the full data — a resample that
+            # pushes a group under `min_group_size` would otherwise compare a
+            # different set of groups in each draw, and the interval would
+            # describe a moving statistic rather than the sampling error of a
+            # fixed one.
+            scored = list(per_group)
+            labels = groups.to_numpy().astype(str)
+
+            def ece_gap(positions, labels=labels, scored=scored) -> float:
+                drawn = labels[positions]
+                per_draw = []
+                for value in scored:
+                    mask = drawn == value
+                    if mask.sum() < 2:
+                        continue
+                    per_draw.append(
+                        expected_calibration_error(
+                            actuals[positions][mask],
+                            probabilities[positions][mask],
+                            n_bins=self.config.n_calibration_bins,
+                        )
+                    )
+                if len(per_draw) < 2:
+                    return 0.0
+                return float(max(per_draw) - min(per_draw))
+
+            interval = self.uncertainty.interval(
+                ece_gap,
+                pd.DataFrame({"actual": actuals, "p": probabilities, "group": labels}),
             )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.subgroup_calibration_threshold,
+                point=gap,
+                risk_flag="SUBGROUP_CALIBRATION_RISK",
+                blocking=self.blocking,
+            )
+            flag = verdict.flag
             results.append(
                 CheckResult(
                     self.name,
@@ -344,16 +383,19 @@ class SubgroupCalibrationCheck(BaseCheck):
                     flag,
                     detail=(
                         f"{label}: calibration error spans {per_group[best]:.4f} ({best}) "
-                        f"to {per_group[worst]:.4f} ({worst}) — gap {gap:.4f} "
+                        f"to {per_group[worst]:.4f} ({worst}) — gap "
+                        f"{self.uncertainty.measured(interval, gap)} "
                         f"(max {self.config.subgroup_calibration_threshold})"
+                        f"{verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": label,
                         "group_ece": {k: round(v, 5) for k, v in per_group.items()},
                         "ece_gap": round(gap, 5),
                         "threshold": self.config.subgroup_calibration_threshold,
                         "worst_calibrated_group": worst,
+                        **verdict.metadata,
                     },
                 )
             )
@@ -457,8 +499,13 @@ class EqualisedOddsCheck(BaseCheck):
     blocking = False
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
 
     @staticmethod
     def _rates(actuals: np.ndarray, predicted: np.ndarray) -> tuple[float, float] | None:
@@ -544,23 +591,67 @@ class EqualisedOddsCheck(BaseCheck):
             fpr_gap = max(fprs.values()) - min(fprs.values())
             threshold = self.config.equalised_odds_threshold
 
+            scored = list(rates)
+            labels = groups.to_numpy().astype(str)
+            frame = pd.DataFrame({"actual": actuals, "pred": predicted, "group": labels})
+
+            def rate_gap(positions, which: int, labels=labels, scored=scored) -> float:
+                """Spread in TPR (`which=0`) or FPR (`which=1`) across the
+                groups the point estimate scored."""
+                drawn = labels[positions]
+                per_draw = []
+                for value in scored:
+                    mask = drawn == value
+                    if not mask.any():
+                        continue
+                    pair = self._rates(actuals[positions][mask], predicted[positions][mask])
+                    if pair is not None:
+                        per_draw.append(pair[which])
+                if len(per_draw) < 2:
+                    return 0.0
+                return float(max(per_draw) - min(per_draw))
+
+            tpr_interval = self.uncertainty.interval(
+                lambda positions: rate_gap(positions, 0), frame
+            )
+            tpr_verdict = self.uncertainty.verdict(
+                tpr_interval,
+                threshold,
+                point=tpr_gap,
+                risk_flag="EQUAL_OPPORTUNITY_RISK",
+                blocking=self.blocking,
+            )
+            odds_interval = self.uncertainty.interval(
+                lambda positions: max(rate_gap(positions, 0), rate_gap(positions, 1)), frame
+            )
+            odds_verdict = self.uncertainty.verdict(
+                odds_interval,
+                threshold,
+                point=max(tpr_gap, fpr_gap),
+                risk_flag="EQUALISED_ODDS_RISK",
+                blocking=self.blocking,
+            )
+
             results.append(
                 CheckResult(
                     self.name,
                     self.category,
-                    "EQUAL_OPPORTUNITY_RISK" if tpr_gap > threshold else "OK",
+                    tpr_verdict.flag,
                     detail=(
-                        f"{label}: true-positive-rate difference={tpr_gap:.3f} "
+                        f"{label}: true-positive-rate difference="
+                        f"{self.uncertainty.measured(tpr_interval, tpr_gap)} "
                         f"(max {threshold}) — among those who should be approved, "
                         f"{min(tprs, key=lambda g: tprs[g])} is least likely to be"
+                        f"{tpr_verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=tpr_verdict.blocking,
                     metadata={
                         "protected_attr": label,
                         "notion": "equal_opportunity",
                         "tpr_difference": round(tpr_gap, 4),
                         "group_tpr": {g: round(v, 4) for g, v in tprs.items()},
                         "threshold": threshold,
+                        **tpr_verdict.metadata,
                     },
                 )
             )
@@ -568,12 +659,14 @@ class EqualisedOddsCheck(BaseCheck):
                 CheckResult(
                     self.name,
                     self.category,
-                    "EQUALISED_ODDS_RISK" if max(tpr_gap, fpr_gap) > threshold else "OK",
+                    odds_verdict.flag,
                     detail=(
-                        f"{label}: equalised odds difference={max(tpr_gap, fpr_gap):.3f} "
+                        f"{label}: equalised odds difference="
+                        f"{self.uncertainty.measured(odds_interval, max(tpr_gap, fpr_gap))} "
                         f"(max {threshold}) — TPR gap {tpr_gap:.3f}, FPR gap {fpr_gap:.3f}"
+                        f"{odds_verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=odds_verdict.blocking,
                     metadata={
                         "protected_attr": label,
                         "notion": "equalised_odds",
@@ -582,6 +675,7 @@ class EqualisedOddsCheck(BaseCheck):
                         "fpr_difference": round(fpr_gap, 4),
                         "group_fpr": {g: round(v, 4) for g, v in fprs.items()},
                         "threshold": threshold,
+                        **odds_verdict.metadata,
                     },
                 )
             )
