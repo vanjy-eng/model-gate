@@ -148,8 +148,9 @@ also_copy = ["tests/", "pyproject.toml"]
 # reporting.py is excluded for a different reason and a weaker one: it is HTML
 # assembly, so most mutants are cosmetic string edits, and the properties that
 # do matter (self-contained, escaped, degrades) are asserted in
-# tests/test_reporting.py, which is not in the fast selection below. Including
-# it would sink the score without producing a single actionable survivor.
+# tests/test_reporting.py. Including it would sink the score without producing
+# a single actionable survivor. (That file *is* in the selection below now, so
+# the old "and its tests do not even run" half of this argument is gone.)
 # The *plots* are mutated, because a chart disagreeing with its own finding is
 # exactly the failure this tooling exists to catch.
 do_not_mutate = [
@@ -159,19 +160,39 @@ do_not_mutate = [
     "*/reporting.py",
 ]
 
-# The full suite is the wrong selection here: the notebook-scale fixtures make
-# every mutant slow. These files are fast and assert on values rather than on
-# "something was returned", which is what actually kills mutants.
+# Everything except the three files that test the *repository* rather than the
+# package. This used to be five hand-picked fast files, chosen so the run would
+# finish inside its box — and that choice quietly invalidated the number it
+# produced.
 #
-# test_plots.py earns its ~1s because it reads values back off the Axes and
-# asserts them against the check's own metadata — the one invariant that keeps
-# a chart from contradicting the number printed beside it.
+# A survivor is only evidence of a missing assertion if the assertion would
+# have run. With five files it usually had not. Measured over the same 1,651
+# mutants:
+#
+#     five files   559 killed, 1058 survived, 34 not covered   34.6%
+#     this list    898 killed,  753 survived,  0 not covered   54.4%
+#
+# 305 of those "survivors" were killed the moment the tests that already
+# existed were allowed to run. The worked example: mutating `average_ranks`'s
+# tie detection from `stop - start > 1` to `> 2` passed all 125 tests in the
+# old selection and failed `tests/test_validation_checks.py` in 0.16 s — a
+# file the selection did not include. Anyone working that backlog would have
+# been writing tests that were already written.
+#
+# The cost is real: ~2.4x slower per mutant (2.53 -> 1.07 mutants/s locally on
+# ten children), which is why .github/workflows/mutation.yml runs weekly rather
+# than per-PR. Truthful and weekly beats misleading and per-push.
+#
+# The three exclusions read repository files rather than exercising the
+# package, so no mutant can change their outcome and running them per-mutant is
+# pure cost. test_documentation.py additionally cannot collect inside mutants/,
+# because `also_copy` does not carry CONTRIBUTING.md or web/ — which is how the
+# narrow selection got started.
 pytest_add_cli_args_test_selection = [
-    "tests/test_known_answers.py",
-    "tests/test_invariants.py",
-    "tests/test_properties.py",
-    "tests/test_not_applicable.py",
-    "tests/test_plots.py",
+    "tests/",
+    "--ignore=tests/test_documentation.py",
+    "--ignore=tests/test_package.py",
+    "--ignore=tests/test_mutation_report.py",
 ]
 pytest_add_cli_args = ["-x", "-q", "--no-header", "--no-cov", "-p", "no:cacheprovider"]
 

@@ -1,0 +1,95 @@
+# Mutation testing, on a schedule rather than per-PR.
+#
+# It lived in ci.yml and ran on every push, time-boxed to 25 minutes. Two
+# things were wrong with that. The box was too small — the run was killed at
+# 1221 of 1651 mutants every time — and `|| true` meant nothing said so, so the
+# job published a "32.2% kill rate" that described three-quarters of the
+# surface and reported green. See scripts/mutation_report.py.
+#
+# Fixing the measurement made it slower: the mutant pool now runs against the
+# whole test suite instead of five hand-picked files, which is ~2.4x the cost
+# per mutant and about 80 minutes for the full surface on a 4-core runner. That
+# is not a per-push cost worth paying, and a truncated weekly run would be
+# worth less than no run. So it runs weekly, and on demand when someone is
+# hardening an area.
+name: Mutation testing
+
+on:
+  schedule:
+    # Mondays 04:00 UTC, an hour after tooling.yml so they do not contend.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      max_children:
+        description: "Parallel workers"
+        required: false
+        default: "4"
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    name: Mutation testing (decision surface)
+    runs-on: ubuntu-latest
+    # Backstop only. The `timeout` below is the real budget, because it lets
+    # the report step run and say *why* the tally is short; a job-level
+    # cancellation kills the reporting with it.
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev,mutation,structured]"
+
+      - name: Run mutation testing
+        # 110m against a projected ~80m, from measured rates rather than an
+        # estimate: 0.81 mutants/s in CI on the old selection, 2.36x slower per
+        # mutant on the new one. The previous 25m box came from a guess of
+        # "roughly eleven minutes" and was wrong by a factor of three.
+        #
+        # The exit status is written to a file instead of being swallowed,
+        # because it is the difference between "finished" and "killed part-way"
+        # and only this step can observe it.
+        run: |
+          set +e
+          timeout 110m python scripts/mutmut_decision_surface.py run \
+            --max-children "${{ github.event.inputs.max_children || '4' }}" \
+            2>&1 | tee mutation.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "$status" > mutation.exit
+          echo "mutmut run exited $status"
+
+      - name: Report
+        if: always()
+        # stdout and stderr both go to the file so the FAIL explanation lands
+        # in the job summary. Under `bash -e` an earlier version aborted on a
+        # failing report and never wrote the summary at all, hiding precisely
+        # the message worth reading.
+        run: |
+          status=0
+          python scripts/mutation_report.py mutation.log --min-tested 200 \
+            --run-exit-status "$(cat mutation.exit 2>/dev/null || echo 0)" \
+            > mutation-report.txt 2>&1 || status=$?
+          cat mutation-report.txt
+          {
+            echo "### Mutation testing"
+            echo '```'
+            cat mutation-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-log
+          path: |
+            mutation.log
+            mutation-report.txt
+          retention-days: 30
