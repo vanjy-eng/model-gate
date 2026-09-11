@@ -118,55 +118,6 @@ jobs:
           print("text-only report renders every finding")
           PY
 
-  mutation:
-    # Still advisory, but for a different reason than before. The score is now
-    # a rate over a population that *finishes* — see
-    # scripts/mutmut_decision_surface.py — so it is comparable release to
-    # release and a floor is safe to set. It stays non-blocking for one
-    # release so the first few numbers can be read before one becomes a gate.
-    name: Mutation testing (decision surface, advisory)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: Install
-        run: pip install -e ".[dev,mutation,structured]"
-      - name: Run mutation testing
-        # The decision surface is about 1,880 mutants against 12,436 for the
-        # whole codebase — roughly eleven minutes at the observed throughput,
-        # so the box is now a safety net rather than the thing that decides
-        # which mutants get run. `|| true` still only tolerates a timeout; the
-        # report step decides whether the run did real work, because an
-        # earlier version of this job reported green while importing nothing.
-        run: |
-          timeout 25m python scripts/mutmut_decision_surface.py run --max-children 4 \
-            2>&1 | tee mutation.log || true
-
-      - name: Report
-        run: |
-          python scripts/mutation_report.py mutation.log --min-tested 200 \
-            | tee mutation-report.txt
-          {
-            echo "### Mutation testing"
-            echo '```'
-            cat mutation-report.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mutation-log
-          path: |
-            mutation.log
-            mutation-report.txt
-          retention-days: 7
-
   build:
     name: Build distribution
     runs-on: ubuntu-latest

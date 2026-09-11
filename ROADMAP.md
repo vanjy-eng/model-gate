@@ -87,9 +87,9 @@ Add `required_status_checks` naming the jobs, exactly:
 - `Build distribution`
 - `Build site`
 
-Deliberately **not** `Mutation testing (advisory)`. It is `continue-on-error`
-and time-boxed; requiring it would make a 25-minute advisory job a merge
-blocker.
+Mutation testing is not on that list and no longer could be: it moved out of
+`ci.yml` into `.github/workflows/mutation.yml` and runs weekly, so it never
+reports a status on a pull request. See *Mutation survivors* below.
 
 ### Two rules that cannot currently be satisfied
 
@@ -131,6 +131,65 @@ prevents a repeat of the withdrawn v0.3.0/v0.3.1 tags.
 - [ ] Restore the plain "direct pushes are blocked" wording in
       `CONTRIBUTING.md` once the first two boxes are ticked — it has been
       softened to the truth in the meantime rather than left as a false claim
+
+---
+
+## Mutation survivors — a real backlog, now that the number means something
+
+Not a release either. Recorded here because the figure changed for reasons
+that have nothing to do with the tests, and the difference should not be
+mistaken for progress or regression later.
+
+Until 0.6.0 the mutation job measured mutants against five hand-picked test
+files, and was killed by its own timeout at ~74% of the surface without
+saying so. Both are fixed. Measured over the same 1,651 mutants:
+
+| | old (5 files, truncated) | now (suite, complete) |
+|---|---|---|
+| kill rate | 34.6% | **54.4%** |
+| survivors | 1,058 | **753** |
+| never reached | 430 | 0 |
+
+305 of those survivors were killed by assertions that already existed. The
+remaining 753 are the real backlog — a comparison, threshold or boolean that
+could be wrong with nothing to notice.
+
+Worked so far, with each kill verified by applying the mutant and watching the
+new test fail:
+
+- `uncertainty.bootstrap` and `permutation_pvalue` — the `min_rows` floor, the
+  kept-draw floor, `continue` vs `break` on a degenerate draw, the draw
+  counter, and the tie tolerance in the p-value. 11 mutants.
+- `stats` — `rank_auc` with a single positive or a single negative, one-member
+  groups in `selection_rate_difference` and `correlation_ratio`, and the
+  empty / constant / small-variance guards. 11 mutants.
+
+Two families were checked and found **equivalent** rather than unkilled, and
+are annotated in place so nobody spends an afternoon on them: `average_ranks`'
+tie-run condition (a singleton run averages to the rank it already had) and
+`benjamini_hochberg`'s upper clip bound (unreachable by construction).
+
+Roughly by module, what is left:
+
+| Module | Survivors |
+|---|---|
+| `structured.actuarial_checks` | 111 |
+| `structured.calibration_checks` | 102 |
+| `structured.security` | 96 |
+| `structured.fairness` | 91 |
+| `structured.regression_fairness` | 73 |
+| `structured.validation_checks` | 44 |
+| `calibration` | 38 |
+| `metrics` | 31 |
+| everything else | ~146 |
+
+Take these an area at a time while hardening that area, not as a sprint. A
+survivor is a question ("would anything notice?"), and the answer is sometimes
+"this mutant is equivalent" — which is worth writing down rather than
+papering over with a test that asserts the mutation instead of the behaviour.
+
+Do not set `--min-kill-rate` until a few weekly runs have established where the
+number actually sits.
 
 ---
 

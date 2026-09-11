@@ -35,8 +35,15 @@ whose composition changed every release.
 And the timed run already reached only a fraction of it — 4,185 of 7,004 at
 0.5.2, so roughly a third of today's total, with *which* third decided by
 where the clock stopped. **Focusing is not less coverage. It replaces an
-arbitrary subset with a chosen one**, small enough to finish, which is what
-makes a rate comparable release to release and a floor safe to turn on.
+arbitrary subset with a chosen one**, which is what makes a rate comparable
+release to release and a floor safe to turn on.
+
+Focusing did not, on its own, make it finish. The first version of this claim
+said the pruned surface was "small enough to finish ... in roughly eleven
+minutes"; at 0.6.0 it took ~34 minutes in CI against a 25-minute box, so every
+run was cut off at about 74% and `|| true` hid it. The budget now comes from
+the measured rate, and scripts/mutation_report.py fails rather than reporting a
+partial tally as a whole one.
 
 The four operators kept are the project's stated failure mode written as
 mutations: a flipped comparison, a shifted threshold, an inverted boolean.
@@ -47,6 +54,15 @@ That *is* the confident-wrong-green-number.
 Questions like "would anything notice if `metadata=` were dropped?". A few of
 those are real findings. They are a minority of a majority, and the timed run
 was not answering them either — it ran out of clock first.
+
+## What a survivor here does and does not mean
+
+It means no test in `pytest_add_cli_args_test_selection` would notice. That
+qualifier is load-bearing: when the selection was five hand-picked files, 305
+of the 1,058 reported survivors were killed as soon as the rest of the suite
+was allowed to run, and the kill rate moved 34.6% -> 54.4% over the same 1,651
+mutants without a single new assertion being written. See the comment on that
+setting in pyproject.toml.
 
 ## Usage
 
@@ -112,7 +128,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         "A survivor here means a comparison, threshold or boolean could be "
-        "wrong and no test would notice.",
+        "wrong and no test in `pytest_add_cli_args_test_selection` would "
+        "notice.",
         file=sys.stderr,
     )
 

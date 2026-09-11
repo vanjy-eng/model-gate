@@ -138,15 +138,24 @@ make a failure go away, the failure is the point.
 
 ### Mutation testing
 
-At 0.5.2 the suite reports **91% line coverage** and a **42.0% mutation kill
-rate** (1758 of 4185 mutants with a verdict). That gap is the honest measure
-of how much of the suite executes code without asserting anything about it —
-and the reason coverage alone is not the bar.
+At 0.6.0 the suite reports **93% line coverage** and a **54.4% mutation kill
+rate** (898 of 1651 mutants on the decision surface). That gap is the honest
+measure of how much of the suite executes code without asserting anything
+about it — and the reason coverage alone is not the bar.
 
-Read the rate as a trend, not a target. The run is time-boxed to 25 minutes,
-so a release that adds code adds mutants faster than the box gets through
-them: 0.5.2 killed 286 more mutants than 0.5.1 and still scored 0.7 points
-lower.
+Both halves of that number were wrong until recently, in the same direction:
+
+- The run was time-boxed to 25 minutes and needed ~34, so it was killed at
+  about 1221 of 1651 mutants — and `|| true` in the workflow discarded the
+  timeout's exit code, so the job reported green and published a kill rate
+  over three-quarters of the surface as though it covered all of it.
+- Mutants were tested against five hand-picked test files rather than the
+  suite, so a "survivor" often meant "no *selected* test would notice". 305 of
+  1,058 reported survivors died the moment the rest of the suite was allowed to
+  run; the rate moved 34.6% -> 54.4% with no new assertions written.
+
+Read the rate as a trend, not a target — but it is now a trend over a
+population that finishes, measured against the tests that actually exist.
 
 ```bash
 pip install -e ".[mutation]"          # needs Python 3.10+
@@ -169,16 +178,19 @@ prose detail strings and scoring on whether some test happens to assert that
 substring. The script prunes the operator table to the four operators that
 flip a comparison, shift a threshold or invert a boolean — which is this
 project's stated failure mode written as mutations — leaving about 1,880
-mutants and a run that finishes in roughly eleven minutes.
+mutants.
 
 Finishing is the point. A rate over a population that times out is a rate over
 whichever third of it the clock reached, which is why the old numbers could go
 *down* while killing 286 more mutants.
 
-It is advisory in CI (`continue-on-error`), time-boxed to 25 minutes, and slow
-locally — nobody expects you to run it on every change. It is the right tool
-when you are hardening an area and want to know whether the tests would have
-noticed.
+**It runs weekly, not per-PR** — `.github/workflows/mutation.yml`, Mondays
+04:00 UTC, plus `workflow_dispatch` when you are hardening an area. Testing
+against the whole suite costs ~2.4x per mutant (2.53 -> 1.07 mutants/s locally
+on ten children), which puts the full surface at ~80 minutes on a CI runner.
+That is not worth paying on every push, and a truncated weekly run would be
+worth less than no run at all. The job fails if it does not finish, rather than
+reporting the part it managed.
 
 Use `scripts/mutation_report.py` rather than reading mutmut's own output:
 `mutmut results` lists **only survivors**, so counting statuses from it yields
@@ -524,10 +536,14 @@ Two conventions that are easy to get wrong:
   are done.
 
 Mutation figures are the one exception to "keep the numbers current". They are
-labelled by the release that measured them (*"at 0.5.2 the suite reports …"*),
-which stays true forever, and the run takes 25 minutes. Re-measure when you
-are hardening an area, not on every release, and re-label rather than
-overwrite.
+labelled by the release that measured them (*"at 0.6.0 the suite reports …"*),
+which stays true forever, and a full run is ~25 minutes locally on ten workers
+and ~80 in CI. Re-measure when you are hardening an area, not on every release,
+and re-label rather than overwrite.
+
+Label them with the *selection* too, when it changes. The 0.5.2 figures were
+measured against five test files and the 0.6.1 ones against the suite; they are
+both honest and not comparable, and only the label says so.
 
 ## Branches
 
