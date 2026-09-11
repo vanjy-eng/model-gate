@@ -6,6 +6,106 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.1] - unreleased
+
+Making the mutation score mean what it says.
+
+Nothing here changes a verdict, a score or a public API — it is entirely
+tests, CI and the prose describing them. It gets an entry because the
+headline figure in `CONTRIBUTING.md` moved from 42.0% to 54.4% without a
+single assertion being added for most of that jump, and a number that moves
+for reasons unrelated to the tests is exactly the kind of thing this project
+exists to object to elsewhere.
+
+Two independent faults, both of which made the job report more confidence
+than it had.
+
+**The run never finished, and said nothing.** CI run 34435174771 published
+`kill rate 382/1187 = 32.2%`. mutmut's last output was a mid-progress
+spinner, `1221/1651`, exactly 25m00s after the step began: `timeout 25m` had
+killed it and **430 mutants, 26% of the surface, never ran**. Three things had
+to line up — `|| true` discarded the timeout's exit 124; the report script
+compared verdicts (1187) against a floor of 200, a guard built to catch "mutmut
+imported nothing" that cannot tell a finished run from a truncated one; and the
+job was advisory, so nothing downstream questioned it. The 25-minute box came
+from an estimate of "roughly eleven minutes" against a measured ~34.
+
+**The score was measured against five test files out of thirty.**
+`pytest_add_cli_args_test_selection` narrowed the pool for speed, so a
+"survivor" meant *no selected test would notice* while the tooling printed *no
+test would notice*. Mutating `average_ranks`' tie detection from
+`stop - start > 1` to `> 2` survived all 125 tests the job ran, and failed
+`tests/test_validation_checks.py` in 0.16s — a file the selection did not
+contain. Its docstring says tie handling "is not cosmetic here"; it *was*
+tested, and the tests never ran.
+
+Over the same 1,651 mutants:
+
+| | five files, truncated | the suite, complete |
+|---|---|---|
+| kill rate | 34.6% | **54.4%** |
+| survivors | 1,058 | **753** |
+| never reached | 430 | **0** |
+
+**305 of the reported survivors were killed by assertions that already
+existed.** Anyone working that backlog would have written tests twice.
+
+### Fixed
+- `scripts/mutation_report.py` fails on an incomplete run instead of reporting
+  a partial tally as a whole one. Every status is one processed mutant, so
+  their sum is exactly the left side of mutmut's own `1221/1651` counter — the
+  script already parsed the generated total and never compared the two.
+  `--run-exit-status` carries the run's real exit code so a timeout can be
+  named rather than inferred, `--allow-incomplete` is the explicit opt-out, and
+  a partial kill rate is labelled `PARTIAL` on the same line as the number,
+  because that is the line that gets quoted.
+- The mutation job's report step ran under `bash -e` with the summary block
+  after the failing command, so a failed report wrote nothing to
+  `$GITHUB_STEP_SUMMARY` — it hid precisely the message worth reading.
+- `rank_auc` is now asserted to be defined with a single positive or a single
+  negative, and to return NaN for a single-class input *without* dividing by
+  zero. The guard was correct; nothing tested it, and a numpy warning inside a
+  bootstrap draw is what `uncertainty` treats as "this draw is not evidence".
+
+### Changed
+- Mutants are tested against the whole suite, less the three files that test
+  the repository rather than the package. No mutant can change their outcome,
+  and `tests/test_documentation.py` cannot collect inside `mutants/` because
+  `also_copy` omits `CONTRIBUTING.md` — likely how the narrow selection began.
+- Mutation testing moved out of `ci.yml` into `.github/workflows/mutation.yml`
+  and runs **weekly**, plus `workflow_dispatch`. Truthfulness costs 2.36x per
+  mutant (2.53 to 1.07 mutants/s locally on ten workers), projecting to ~80
+  minutes on a four-core runner. That is not a per-push cost, and a truncated
+  weekly run is worth less than none. It no longer sets `continue-on-error`:
+  it blocks nothing now, so a failure should be visible rather than swallowed.
+  **It no longer reports a status on pull requests**, so the
+  `required_status_checks` list in `ROADMAP.md` is eight jobs, not nine.
+- The claims that described the old meaning are corrected rather than deleted,
+  in `pyproject.toml`, `scripts/mutmut_decision_surface.py` and
+  `CONTRIBUTING.md` — including the estimate that set the box it then overran.
+
+### Added
+- 22 tests, each written against a specific survivor and each verified by
+  applying the mutant to the source and watching the test fail.
+  `tests/test_uncertainty.py` covers the `min_rows` floor at its boundary, the
+  kept-draw floor, `continue` vs `break` on a degenerate draw (two branches —
+  under `break`, one bad permutation ends the null distribution wherever it
+  falls), the draw counter and the tie tolerance in the p-value. The new
+  `tests/test_stats_boundaries.py` covers one-member groups in
+  `selection_rate_difference` and `correlation_ratio`, and the empty, constant
+  and small-variance guards — including `ss_total <= 1`, which would report "no
+  association" for any feature whose sum of squares is under 1, a unit choice
+  rather than a property of the data.
+- `tests/test_mutation_report.py`, pinning the reporter against the real
+  progress line from the truncated run.
+- Two mutant families checked and found **equivalent** rather than unkilled,
+  annotated in place so nobody spends an afternoon on them: `average_ranks`'
+  tie-run condition (a singleton run spanning `[s, s+1)` averages to
+  `(s + s+1 + 1) / 2 == s + 1`, the rank it already had) and
+  `benjamini_hochberg`'s upper clip bound (unreachable by construction).
+- `ROADMAP.md` records the remaining 753 survivors by module, with a note not
+  to set `--min-kill-rate` until a few weekly runs establish the baseline.
+
 ## [0.6.0] - 2026-09-10
 
 Sampling error, and pinned tooling.
@@ -1348,6 +1448,7 @@ in 0.4.0; example notebooks in 0.4.1.
 - Azure Pipelines and GitHub Actions pre-deployment gate examples.
 
 [Unreleased]: https://github.com/vanjy-eng/model-gate/compare/v0.6.0...HEAD
+[0.6.1]: https://github.com/vanjy-eng/model-gate/compare/v0.6.0...main
 [0.6.0]: https://github.com/vanjy-eng/model-gate/compare/v0.5.4...v0.6.0
 [0.5.4]: https://github.com/vanjy-eng/model-gate/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/vanjy-eng/model-gate/compare/v0.5.2...v0.5.3
