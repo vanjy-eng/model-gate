@@ -38,6 +38,7 @@ from bdp_model_gate.uncertainty import (
     ABOVE,
     BELOW,
     BLOCK,
+    MIN_ROWS_FOR_INTERVAL,
     POINT,
     REVIEW,
     UNCERTAIN_FLAG,
@@ -694,3 +695,149 @@ def test_the_proxy_qvalues_do_not_depend_on_row_order():
         r.metadata.get("feature"): r.flag for r in after
     }
     assert [r.metadata.get("q_value") for r in before] == [r.metadata.get("q_value") for r in after]
+
+
+# --------------------------------------------------------------------------
+# The boundaries themselves
+#
+# Every test below was written against a specific surviving mutant from
+# `scripts/mutmut_decision_surface.py`. These functions are full of thresholds
+# -- the minimum rows to resample at all, the minimum successful draws to form
+# percentiles from, the tie rule in the p-value -- and a threshold that is
+# only ever tested from well inside its own range is a threshold nobody has
+# checked. Each is exercised *at* the boundary, where off-by-one lives.
+# --------------------------------------------------------------------------
+
+
+def _counting(values):
+    """A statistic returning `values[i]` on its i-th call, then NaN.
+
+    `bootstrap` calls the statistic once for the point estimate before the
+    resampling loop, so `values[0]` is the point estimate and the rest are
+    draws. Returning NaN rather than raising exercises the `isfinite` filter
+    specifically.
+    """
+    state = {"i": 0}
+
+    def statistic(positions):
+        i = state["i"]
+        state["i"] += 1
+        return values[i] if i < len(values) else float("nan")
+
+    return statistic
+
+
+def test_exactly_min_rows_is_enough_to_resample():
+    """`n < min_rows` refuses; `n == min_rows` must not.
+
+    The mutant is `<` to `<=`, which moves the floor by one row and silently
+    drops the interval from every check sitting exactly on it. Nothing else in
+    the suite calls `bootstrap` at exactly `min_rows`.
+    """
+    frame = pd.DataFrame({"a": np.arange(float(MIN_ROWS_FOR_INTERVAL))})
+    interval = bootstrap(lambda pos: float(pos.mean()), frame, samples=100)
+    assert interval is not None, "an interval should be available at exactly min_rows"
+
+
+def test_the_hard_floor_is_two_rows_not_three():
+    """`max(2, min_rows)` -- the 2 is a real floor, not decoration: one row
+    cannot be resampled into a distribution. A caller lowering `min_rows`
+    below it should still get an interval at two rows."""
+    frame = pd.DataFrame({"a": [1.0, 5.0]})
+    interval = bootstrap(lambda pos: float(pos.mean()), frame, min_rows=2, samples=100)
+    assert interval is not None, "two rows is the documented hard floor"
+
+
+def test_the_kept_draw_floor_is_inclusive():
+    """ "Fewer than 20 draws is not an interval" means *fewer than*.
+
+    At exactly the floor the interval stands. Two mutants live here -- `<` to
+    `<=`, and `max(20, ...)` to `max(21, ...)` -- and both turn a valid
+    interval into a silent None.
+    """
+    # 1 point estimate + exactly 20 finite draws, then NaN for the rest.
+    interval = bootstrap(
+        _counting([0.5] * 21),
+        pd.DataFrame({"a": np.arange(200.0)}),
+        samples=200,  # floor = max(20, 200 // 10) = 20
+    )
+    assert interval is not None, "exactly 20 kept draws is enough"
+    assert interval.samples == 20
+
+
+def test_the_kept_draw_floor_scales_with_the_request():
+    """The floor is `max(20, samples // 10)`, so asking for more draws demands
+    more of them back. At 220 requested the floor is 22, and 21 is not enough
+    -- which is what separates `// 10` from `// 11`."""
+    interval = bootstrap(
+        _counting([0.5] * 22),  # point estimate + 21 draws
+        pd.DataFrame({"a": np.arange(200.0)}),
+        samples=220,  # floor = max(20, 22) = 22
+    )
+    assert interval is None, "21 kept draws is below the floor of 22"
+
+
+def test_a_permutation_that_raises_is_skipped_not_fatal():
+    """`continue`, not `break`.
+
+    One degenerate permutation is one lost draw. Under `break` it ends the
+    null distribution wherever it happened to occur, and the p-value is then
+    either wrong or -- because the draw count falls below the floor -- absent
+    entirely. The mutant is invisible to any test whose statistic never fails.
+    """
+    state = {"i": 0}
+
+    def fails_once(base, permuted):
+        state["i"] += 1
+        if state["i"] == 3:
+            raise ValueError("degenerate permutation")
+        return 0.5
+
+    p = permutation_pvalue(fails_once, pd.DataFrame({"a": np.arange(100.0)}), samples=100)
+    assert p is not None, "one failed permutation should not end the test"
+
+
+def test_a_non_finite_permutation_is_skipped_not_fatal():
+    """The same rule for the other way a draw can be useless. Separate test
+    because they are separate branches, and a mutant in one is invisible to a
+    test that only exercises the other."""
+    state = {"i": 0}
+
+    def nan_once(base, permuted):
+        state["i"] += 1
+        return float("nan") if state["i"] == 3 else 0.5
+
+    p = permutation_pvalue(nan_once, pd.DataFrame({"a": np.arange(100.0)}), samples=100)
+    assert p is not None, "one non-finite permutation should not end the test"
+
+
+def test_every_permutation_tying_the_observed_value_gives_a_p_of_one():
+    """The exact arithmetic of `(1 + hits) / (1 + drawn)`, pinned.
+
+    A constant statistic makes every permutation tie the observed value, so
+    every draw is a hit and the p-value is exactly 1.0 -- the honest answer:
+    nothing about the observation is special. It is the one input where the
+    value is exact rather than approximate, which is what makes it able to
+    catch a miscounted denominator (`drawn += 2` halves it to ~0.5) and a
+    flipped tie tolerance (`observed + 1e-12` stops counting ties at all and
+    collapses it to ~0.02).
+    """
+    p = permutation_pvalue(
+        lambda base, permuted: 0.5, pd.DataFrame({"a": np.arange(50.0)}), samples=50
+    )
+    assert p == 1.0
+
+
+def test_the_documented_defaults_are_the_shipped_ones():
+    """`samples=1000` and `random_state=42` are contract, not preference: the
+    docs quote them and reproducibility depends on the seed. Every caller in
+    the package passes its own, so nothing else would notice them drifting."""
+    import inspect
+
+    for fn in (bootstrap, permutation_pvalue):
+        defaults = {
+            name: parameter.default for name, parameter in inspect.signature(fn).parameters.items()
+        }
+        assert defaults["samples"] == 1000, fn.__name__
+        assert defaults["random_state"] == 42, fn.__name__
+        assert defaults["min_rows"] == MIN_ROWS_FOR_INTERVAL, fn.__name__

@@ -399,6 +399,11 @@ def permutation_pvalue(
         drawn += 1
         # `>=` rather than `>`: a permutation that ties the observed value is
         # evidence against the observation being special, not for it.
+        #
+        # Mutating this to `>` is an equivalent mutant and shows up as a
+        # permanent survivor: with the -1e-12 slack the two differ only when
+        # `value` lands exactly on `observed - 1e-12`. Mutating the slack to
+        # `+1e-12` is not equivalent, and is covered.
         if value >= observed - 1e-12:
             hits += 1
 
