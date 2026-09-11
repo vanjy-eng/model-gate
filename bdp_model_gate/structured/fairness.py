@@ -8,13 +8,20 @@ import pandas as pd
 from .._logging import get_logger
 from .._sampling import stable_sample
 from ..classes import favourable_mask, resolve_favourable
-from ..config import FairnessConfig
+from ..config import FairnessConfig, UncertaintyConfig
 from ..core.base import BaseCheck, CheckResult
 from ..exceptions import GateConfigurationError
 from ..metrics import to_class_labels, to_hard_labels
 from ..model import ModelAdapter
-from ..stats import correlation_ratio
+from ..stats import benjamini_hochberg, correlation_ratio, selection_rate_difference
 from ..task import ALL_TASKS, CLASSIFICATION_TASKS, MULTICLASS, resolve_task
+from ..uncertainty import (
+    BLOCK,
+    POINT,
+    UNCERTAIN_FLAG,
+    Uncertainty,
+    permutation_pvalue,
+)
 
 logger = get_logger("fairness")
 
@@ -28,8 +35,90 @@ class ProxyCorrelationCheck(BaseCheck):
     blocking = False
     supported_tasks = ALL_TASKS  # compares features to attributes, not predictions
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
+
+    def _qvalues(self, X, protected_df, grid) -> pd.DataFrame | None:
+        """Benjamini-Hochberg q-values for every cell of the grid, or None.
+
+        The grid is a screen: a modest frame is forty comparisons, and a few
+        will look strong by chance. eta-squared alone cannot tell a real
+        association from that, because it is an effect size with no notion of
+        how much data is behind it.
+
+        The p-value is a **permutation** test rather than an F-test, for the
+        reason most of this library's statistics are numpy: it needs no
+        distributional assumption and no scipy, so the proxy screen keeps
+        working on a core install. Shuffling the attribute labels against the
+        feature values is exactly the null being tested — no association —
+        and `permutation_pvalue` does it over the canonical row order, so a
+        re-sorted frame cannot change a q-value.
+        """
+        if not self.uncertainty.config.compute_intervals:
+            return None
+
+        # The permutation count bounds the smallest p-value obtainable, and
+        # Benjamini-Hochberg multiplies the strongest cell's p-value by the
+        # number of comparisons. So with `m` cells the smallest reachable
+        # q-value is about `m / samples` — and if that exceeds the FDR, **no
+        # cell can ever be significant**, however real the association is.
+        #
+        # Left unchecked that reports every genuine proxy as UNCERTAIN, which
+        # is a confidently wrong verdict wearing humility. Say what is needed
+        # and fall back to the effect-size rule instead of producing q-values
+        # that cannot mean anything.
+        n_cells = int(grid.to_numpy().size)
+        samples = self.uncertainty.config.bootstrap_samples
+        needed = int(np.ceil(n_cells / max(self.config.proxy_fdr, 1e-12)))
+        if n_cells and samples < needed:
+            logger.warning(
+                "%s: %d comparison(s) at a %.0f%% false-discovery rate need at least %d "
+                "permutations, and uncertainty.bootstrap_samples is %d — no cell could "
+                "reach significance, so the grid is reported on effect size alone. "
+                "Raise bootstrap_samples to %d, or narrow the feature set.",
+                self.name,
+                n_cells,
+                self.config.proxy_fdr * 100,
+                needed,
+                samples,
+                needed,
+            )
+            return None
+
+        cells, pvalues = [], []
+        for feature in grid.index:
+            values = X[feature].to_numpy(dtype=float)
+            for attr in grid.columns:
+                labels = protected_df[attr].to_numpy()
+                frame = pd.DataFrame({"value": values, "group": labels})
+
+                def eta(base, permuted, values=values, labels=labels):
+                    return correlation_ratio(pd.Series(values[base]), pd.Series(labels[permuted]))
+
+                p = permutation_pvalue(
+                    eta,
+                    frame,
+                    samples=self.uncertainty.config.bootstrap_samples,
+                    random_state=self.uncertainty.config.random_state,
+                    min_rows=self.uncertainty.config.min_rows_for_interval,
+                )
+                if p is None:
+                    return None
+                cells.append((feature, attr))
+                pvalues.append(p)
+
+        if not cells:
+            return None
+        adjusted = benjamini_hochberg(np.asarray(pvalues))
+        out = pd.DataFrame(np.nan, index=grid.index, columns=grid.columns, dtype=float)
+        for (feature, attr), q in zip(cells, adjusted):
+            out.loc[feature, attr] = q
+        return out
 
     @staticmethod
     def _grid(X, protected_df) -> pd.DataFrame:
@@ -61,6 +150,15 @@ class ProxyCorrelationCheck(BaseCheck):
         scan forty rows for it, and the cool cells matter too: they are the
         evidence that the flagged feature is the exception rather than the
         whole feature set leaking.
+
+        Since 0.6.0 a hot cell is not automatically a finding: forty
+        comparisons produce a strong-looking one by chance, and
+        Benjamini-Hochberg says which. **A cell the correction did not support
+        is marked with a `?`** rather than ringed like the rest, because a
+        chart that presents a chance crossing exactly as it presents a
+        confirmed proxy is the more persuasive of two claims and the wrong
+        one. The marks are read from the results, so the ring and the report
+        line cannot disagree.
         """
         from ..plots import require_plotting
         from ..plots.style import caption, new_axes, ring_cell, sharpen_colourbar, verdict_colour
@@ -95,18 +193,45 @@ class ProxyCorrelationCheck(BaseCheck):
 
         # Ring what was actually reported, so the chart and the findings list
         # can be checked against each other at a glance.
+        results = self.run(context) if results is None else results
+        reported = {
+            (r.metadata.get("feature"), r.metadata.get("protected_attr")): r
+            for r in results
+            if r.metadata.get("feature")
+        }
         flagged = verdict_colour("NEEDS_REVIEW")
+        muted = verdict_colour("NOT_APPLICABLE")
+        n_unsupported = 0
         for i, j in zip(*np.where(grid.to_numpy() > self.config.proxy_corr_threshold)):
-            ring_cell(ax, int(j), int(i), flagged)
+            feature, attr = grid.index[int(i)], grid.columns[int(j)]
+            result = reported.get((feature, attr))
+            unsupported = result is not None and result.flag == UNCERTAIN_FLAG
+            ring_cell(ax, int(j), int(i), muted if unsupported else flagged)
+            if unsupported:
+                n_unsupported += 1
+                # Not colour alone: these get printed in greyscale.
+                ax.text(
+                    int(j) + 0.86,
+                    int(i) + 0.18,
+                    "?",
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                    color=muted,
+                )
 
-        ax.set_title(f"Proxy strength (ringed above {self.config.proxy_corr_threshold})")
+        title = f"Proxy strength (ringed above {self.config.proxy_corr_threshold}"
+        title += "; ? = not supported by the correction)" if n_unsupported else ")"
+        ax.set_title(title)
         ax.set_xlabel(" ")  # a placeholder the caption can anchor beneath
         ax.set_ylabel("")
         ax.tick_params(labelrotation=0)
         caption(
             ax,
             "eta² is the share of the feature's variance explained by group membership.\n"
-            "A hot cell means dropping the attribute from the model does not remove it.",
+            "A hot cell means dropping the attribute from the model does not remove it. "
+            "A ? marks one\nthat forty comparisons could produce by chance.",
         )
         return ax
 
@@ -125,32 +250,101 @@ class ProxyCorrelationCheck(BaseCheck):
 
         grid = self._grid(X, protected_df)
         values = grid.to_numpy(dtype=float)
+        qvalues = self._qvalues(X, protected_df, grid)
+        n_cells = int(values.size)
         results = []
+
         for i, feature in enumerate(grid.index):
             for j, attr in enumerate(grid.columns):
                 eta_sq = float(values[i, j])
-                if eta_sq > self.config.proxy_corr_threshold:
+                if eta_sq <= self.config.proxy_corr_threshold:
+                    continue
+
+                metadata = {
+                    "feature": feature,
+                    "protected_attr": attr,
+                    "proxy_strength": round(eta_sq, 3),
+                    "threshold": self.config.proxy_corr_threshold,
+                    "n_comparisons": n_cells,
+                }
+                if qvalues is None:
+                    # No multiple-comparison control available — the effect
+                    # size alone decides, exactly as before 0.6.0.
                     results.append(
                         CheckResult(
                             self.name,
                             self.category,
                             "PROXY_RISK",
-                            detail=f"{feature} correlates with {attr} (eta^2={eta_sq:.3f})",
+                            detail=(
+                                f"{feature} correlates with {attr} (eta^2={eta_sq:.3f}, "
+                                "no significance test)"
+                            ),
                             blocking=self.blocking,
-                            metadata={
-                                "feature": feature,
-                                "protected_attr": attr,
-                                "proxy_strength": round(eta_sq, 3),
-                            },
+                            metadata=metadata,
                         )
                     )
+                    continue
+
+                q = float(qvalues.loc[feature, attr])
+                metadata.update(
+                    {
+                        "q_value": round(q, 4),
+                        "fdr": self.config.proxy_fdr,
+                        "on_uncertain": self.uncertainty.config.on_uncertain,
+                    }
+                )
+                survives = q <= self.config.proxy_fdr
+                shared = (
+                    f"{feature} correlates with {attr} (eta^2={eta_sq:.3f}, "
+                    f"q={q:.3f} across {n_cells} comparison(s))"
+                )
+                if survives:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        "",
+                    )
+                elif self.uncertainty.config.on_uncertain == BLOCK:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        f" — above the {self.config.proxy_fdr:.0%} false-discovery rate, "
+                        "reported anyway (on_uncertain='block')",
+                    )
+                elif self.uncertainty.config.on_uncertain == POINT:
+                    flag, blocking, note = (
+                        "PROXY_RISK",
+                        self.blocking,
+                        f" — above the {self.config.proxy_fdr:.0%} false-discovery rate, "
+                        "accepted as a finding (on_uncertain='point')",
+                    )
+                else:
+                    flag, blocking, note = (
+                        UNCERTAIN_FLAG,
+                        False,
+                        f" — a strong effect, but {n_cells} comparisons make one this "
+                        f"size likely by chance: it does not survive Benjamini-Hochberg "
+                        f"at {self.config.proxy_fdr:.0%}",
+                    )
+                results.append(
+                    CheckResult(
+                        self.name,
+                        self.category,
+                        flag,
+                        detail=shared + note,
+                        blocking=blocking,
+                        metadata=metadata,
+                    )
+                )
+
         return results or [
             CheckResult(
                 self.name,
                 self.category,
                 "OK",
-                "no proxy correlations above threshold",
+                f"no proxy correlations above threshold across {n_cells} comparison(s)",
                 self.blocking,
+                metadata={"n_comparisons": n_cells},
             )
         ]
 
@@ -181,8 +375,15 @@ class DisparateImpactCheck(BaseCheck):
     # continuous target. Regression uses the regression_fairness suite.
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        # Validates `on_uncertain` at construction, so a typo fails while the
+        # suite is being built rather than partway through a run.
+        self.uncertainty = Uncertainty(uncertainty)
 
     def run(self, context) -> list[CheckResult]:
         if context.protected_df is None or context.protected_df.empty:
@@ -196,7 +397,14 @@ class DisparateImpactCheck(BaseCheck):
                 )
             ]
         try:
-            from fairlearn.metrics import demographic_parity_difference
+            # Imported but no longer called for the value: the statistic is
+            # `stats.selection_rate_difference`, which the bootstrap needs
+            # because fairlearn measures 3.9 ms a call against its 22 µs.
+            # The *requirement* is kept so this release changes intervals and
+            # nothing else — dropping it would turn a core install's
+            # NOT_APPLICABLE into a live verdict, which is a capability change
+            # that deserves its own announcement rather than a free ride.
+            import fairlearn.metrics  # noqa: F401
         except ImportError:
             return [
                 CheckResult(
@@ -245,25 +453,57 @@ class DisparateImpactCheck(BaseCheck):
                     self.config.decision_threshold,
                 )
 
+        truth = np.asarray(y_true_eval)
+        predicted = np.asarray(y_pred)
+        threshold = self.config.disparity_threshold
+
         results = []
         for attr in context.protected_df.columns:
-            dpd = demographic_parity_difference(
-                y_true_eval,
-                y_pred,
-                sensitive_features=context.protected_df[attr],
+            groups = context.protected_df[attr].to_numpy()
+
+            def parity(positions, groups=groups):
+                """Parity difference over a set of row positions.
+
+                One function for the point estimate and every resample, so
+                the interval cannot describe a different statistic from the
+                one the verdict came from — and numpy rather than fairlearn,
+                because a thousand resamples through `MetricFrame` costs
+                eight seconds a check. `test_uncertainty.py` asserts the two
+                agree.
+                """
+                return selection_rate_difference(predicted[positions], groups[positions])
+
+            # Canonical ordering is derived from exactly the columns the
+            # statistic reads, not from X — so a wide feature frame costs
+            # nothing here, and two runs on the same three columns agree.
+            frame = pd.DataFrame({"y_true": truth, "y_pred": predicted, "group": groups})
+            interval = self.uncertainty.interval(parity, frame)
+            dpd = interval.point if interval is not None else parity(np.arange(len(frame)))
+
+            verdict = self.uncertainty.verdict(
+                interval,
+                threshold,
+                point=dpd,
+                risk_flag="DISPARITY_RISK",
+                blocking=self.blocking,
             )
-            flag = "DISPARITY_RISK" if abs(dpd) > self.config.disparity_threshold else "OK"
             results.append(
                 CheckResult(
                     self.name,
                     self.category,
-                    flag,
-                    detail=f"{attr}: demographic parity diff={dpd:.3f}{favourable_note}",
-                    blocking=self.blocking,
+                    verdict.flag,
+                    detail=(
+                        f"{attr}: demographic parity diff="
+                        f"{self.uncertainty.measured(interval, dpd)} "
+                        f"(max {threshold}){favourable_note}{verdict.note}"
+                    ),
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": attr,
                         "demographic_parity_diff": round(dpd, 3),
+                        "threshold": threshold,
                         "decision_threshold": self.config.decision_threshold,
+                        **verdict.metadata,
                     },
                 )
             )
@@ -388,8 +628,13 @@ class ShapSubgroupCheck(BaseCheck):
     blocking = False
     supported_tasks = ALL_TASKS  # SHAP contributions are defined for any output
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
 
     @staticmethod
     def _build_explainer(shap_module, model, X, adapter=None):
@@ -553,32 +798,61 @@ class ShapSubgroupCheck(BaseCheck):
 
         results = []
         for attr in context.protected_df.columns:
+            groups = context.protected_df[attr].to_numpy()
             for feature in context.X.columns:
-                group_means = shap_df[feature].groupby(context.protected_df[attr].values).mean()
+                contributions = shap_df[feature].to_numpy(dtype=float)
+                group_means = shap_df[feature].groupby(groups).mean()
                 gap = float(group_means.max() - group_means.min())
                 relative_gap = abs(gap) / shap_scale
-                if relative_gap > self.config.shap_gap_threshold:
-                    results.append(
-                        CheckResult(
-                            self.name,
-                            self.category,
-                            "SUBGROUP_IMPACT_RISK",
-                            detail=(
-                                f"{feature} SHAP contribution gap across {attr}="
-                                f"{gap:,.3f} — {relative_gap:.0%} of the mean absolute "
-                                f"contribution {shap_scale:,.3f}"
-                            ),
-                            blocking=self.blocking,
-                            metadata={
-                                "feature": feature,
-                                "protected_attr": attr,
-                                "shap_gap": round(gap, 4),
-                                "relative_gap": round(relative_gap, 4),
-                                "shap_scale": round(shap_scale, 4),
-                                "threshold": self.config.shap_gap_threshold,
-                            },
-                        )
+
+                # The SHAP matrix is already computed, so resampling its rows
+                # costs nothing more than arithmetic — no re-explaining, which
+                # would be minutes rather than milliseconds.
+                def spread(positions, contributions=contributions, groups=groups):
+                    per_group = (
+                        pd.Series(contributions[positions]).groupby(groups[positions]).mean()
                     )
+                    if per_group.size < 2:
+                        return 0.0
+                    return abs(float(per_group.max() - per_group.min())) / shap_scale
+
+                interval = self.uncertainty.interval(
+                    spread,
+                    pd.DataFrame({"contribution": contributions, "group": groups}),
+                )
+                verdict = self.uncertainty.verdict(
+                    interval,
+                    self.config.shap_gap_threshold,
+                    point=relative_gap,
+                    risk_flag="SUBGROUP_IMPACT_RISK",
+                    blocking=self.blocking,
+                )
+                if verdict.flag == "OK":
+                    continue
+                results.append(
+                    CheckResult(
+                        self.name,
+                        self.category,
+                        verdict.flag,
+                        detail=(
+                            f"{feature} SHAP contribution gap across {attr}="
+                            f"{gap:,.3f} — "
+                            f"{self.uncertainty.measured(interval, relative_gap)} of the "
+                            f"mean absolute contribution {shap_scale:,.3f} "
+                            f"(max {self.config.shap_gap_threshold:.0%}){verdict.note}"
+                        ),
+                        blocking=verdict.blocking,
+                        metadata={
+                            "feature": feature,
+                            "protected_attr": attr,
+                            "shap_gap": round(gap, 4),
+                            "relative_gap": round(relative_gap, 4),
+                            "shap_scale": round(shap_scale, 4),
+                            "threshold": self.config.shap_gap_threshold,
+                            **verdict.metadata,
+                        },
+                    )
+                )
         return results or [
             CheckResult(
                 self.name,
@@ -602,9 +876,15 @@ class CounterfactualFlipCheck(BaseCheck):
     # the mean prediction shift, which GroupMeanGapCheck already covers.
     supported_tasks = CLASSIFICATION_TASKS
 
-    def __init__(self, config: FairnessConfig | None = None, n_samples: int = 200):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        n_samples: int = 200,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
         self.n_samples = n_samples
+        self.uncertainty = Uncertainty(uncertainty)
 
     @staticmethod
     def _favourable_proba(adapter, frame, context):
@@ -673,23 +953,45 @@ class CounterfactualFlipCheck(BaseCheck):
                 flipped = sample.copy()
                 flipped[attr] = val
                 flipped_preds = self._favourable_proba(adapter, flipped, context)
-                shift = float(np.mean(np.abs(flipped_preds - base_preds)))
-                flag = (
-                    "COUNTERFACTUAL_RISK"
-                    if shift > self.config.counterfactual_shift_threshold
-                    else "OK"
+                per_row = np.abs(np.asarray(flipped_preds) - np.asarray(base_preds))
+                shift = float(np.mean(per_row))
+
+                # Bootstrapped over the *scored subsample*, not the full frame:
+                # the interval has to describe the rows the point estimate came
+                # from, and re-scoring more rows would cost another pass through
+                # the model. `stable_sample` is content-addressed, so which rows
+                # those are does not depend on the input order.
+                def mean_shift(positions, per_row=per_row) -> float:
+                    return float(np.mean(per_row[positions]))
+
+                interval = self.uncertainty.interval(mean_shift, pd.DataFrame({"shift": per_row}))
+                verdict = self.uncertainty.verdict(
+                    interval,
+                    self.config.counterfactual_shift_threshold,
+                    point=shift,
+                    risk_flag="COUNTERFACTUAL_RISK",
+                    blocking=self.blocking,
                 )
                 results.append(
                     CheckResult(
                         self.name,
                         self.category,
-                        flag,
-                        detail=f"flipping {attr} to {val!r} shifts predictions by {shift:.4f} on average",
-                        blocking=self.blocking,
+                        verdict.flag,
+                        detail=(
+                            f"flipping {attr} to {val!r} shifts predictions by "
+                            f"{self.uncertainty.measured(interval, shift)} on average "
+                            f"across {len(per_row)} sampled row(s) "
+                            f"(max {self.config.counterfactual_shift_threshold})"
+                            f"{verdict.note}"
+                        ),
+                        blocking=verdict.blocking,
                         metadata={
                             "protected_attr": attr,
                             "flipped_to": str(val),
                             "avg_prediction_shift": round(shift, 4),
+                            "threshold": self.config.counterfactual_shift_threshold,
+                            "n_rows_scored": int(len(per_row)),
+                            **verdict.metadata,
                         },
                     )
                 )

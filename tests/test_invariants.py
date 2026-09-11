@@ -12,7 +12,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bdp_model_gate import GateConfig, ModelGate, PerformanceConfig, StructuredGateContext
+from bdp_model_gate import (
+    FairnessConfig,
+    GateConfig,
+    ModelGate,
+    PerformanceConfig,
+    StructuredGateContext,
+)
 from bdp_model_gate.metrics import resolve_metric
 from bdp_model_gate.structured import default_structured_checks
 from bdp_model_gate.structured.fairness import DisparateImpactCheck, ProxyCorrelationCheck
@@ -555,3 +561,217 @@ def test_the_actual_over_expected_verdict_does_not_depend_on_row_order(frame):
     assert [b["ae"] for b in straight[1].metadata["bands"]] == pytest.approx(
         [b["ae"] for b in shuffled[1].metadata["bands"]]
     )
+
+
+# --- confidence intervals (0.6.0) --------------------------------------------
+
+
+def test_a_uniform_exposure_column_is_a_no_op_for_the_interval_too(frame):
+    """The 0.5.3 invariant, extended to the thing 0.6.0 added.
+
+    The bootstrap hashes the weight column to fix its canonical ordering, so a
+    raw exposure column would make "no exposure" and "exposure = 7.0
+    everywhere" resample in different orders and report different intervals.
+    Normalising the weights by their mean is what keeps both this and the
+    exposure-unit invariance below true.
+    """
+    from bdp_model_gate.structured.regression_fairness import GroupMeanGapCheck
+
+    X, _, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 0.95 + 500.0
+
+    plain = GroupMeanGapCheck().run(_pricing(X, protected, y_pred, y_true))[0]
+    uniform = GroupMeanGapCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=np.ones(len(X)) * 7.0)
+    )[0]
+
+    assert plain.flag == uniform.flag
+    assert plain.metadata["ci_low"] == pytest.approx(uniform.metadata["ci_low"])
+    assert plain.metadata["ci_high"] == pytest.approx(uniform.metadata["ci_high"])
+
+
+def test_rescaling_the_exposure_unit_does_not_move_the_interval(frame):
+    """Months and years are the same book, and the interval has to agree."""
+    from bdp_model_gate.structured.regression_fairness import GroupMeanGapCheck
+
+    X, _, protected = frame
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * 1.08
+    exposure = np.clip(X["tenure"].to_numpy() / 40.0, 0.05, 1.0)
+
+    years = GroupMeanGapCheck().run(_pricing(X, protected, y_pred, y_true, exposure=exposure))[0]
+    months = GroupMeanGapCheck().run(
+        _pricing(X, protected, y_pred, y_true, exposure=exposure * 12.0)
+    )[0]
+
+    assert years.flag == months.flag
+    assert years.metadata["ci_low"] == pytest.approx(months.metadata["ci_low"])
+    assert years.metadata["ci_high"] == pytest.approx(months.metadata["ci_high"])
+
+
+def test_row_order_does_not_move_any_interval(frame):
+    """The one property every interval in the suite rests on, asserted across
+    the checks rather than only through `disparate_impact`."""
+    from bdp_model_gate.structured.regression_fairness import (
+        CalibrationParityCheck,
+        ErrorParityCheck,
+        GroupMeanGapCheck,
+        LossRatioParityCheck,
+    )
+
+    X, _, protected = frame
+    rng = np.random.default_rng(23)
+    y_pred = X["income"].to_numpy()
+    y_true = y_pred * rng.uniform(0.85, 1.2, len(X))
+    expected_loss = np.clip(y_pred * 0.9, 1.0, None)
+    order = rng.permutation(len(X))
+
+    straight = _pricing(X, protected, y_pred, y_true, expected_loss=expected_loss)
+    shuffled = _pricing(
+        X.iloc[order].reset_index(drop=True),
+        protected.iloc[order].reset_index(drop=True),
+        y_pred[order],
+        y_true[order],
+        expected_loss=expected_loss[order],
+    )
+
+    for check in (
+        GroupMeanGapCheck(),
+        ErrorParityCheck(),
+        CalibrationParityCheck(),
+        LossRatioParityCheck(),
+    ):
+        before, after = check.run(straight)[0], check.run(shuffled)[0]
+        assert before.flag == after.flag, check.name
+        assert before.metadata["ci_low"] == pytest.approx(after.metadata["ci_low"]), check.name
+        assert before.metadata["ci_high"] == pytest.approx(after.metadata["ci_high"]), check.name
+
+
+# --- split stability (0.6.0) -------------------------------------------------
+
+
+def _split_stability_book(n, seed):
+    """A credit book with a modest, real gender disparity — the kind that sits
+    near the threshold, which is where a gate's stability actually matters."""
+    rng = np.random.default_rng(seed)
+    features = pd.DataFrame(
+        {
+            "income": rng.normal(50_000, 15_000, n),
+            "age": rng.integers(21, 70, n).astype(float),
+            "tenure": rng.exponential(40, n),
+        }
+    )
+    gender = rng.choice(["M", "F"], n)
+    logit = (features["income"] - 50_000) / 20_000 + np.where(gender == "M", 0.35, -0.35)
+    proba = 1 / (1 + np.exp(-logit))
+    return (
+        features,
+        (rng.random(n) < proba).astype(int),
+        proba.to_numpy(),
+        pd.DataFrame({"gender": gender}),
+    )
+
+
+def _verdicts_on(rows, book, checks):
+    features, y, proba, protected = book
+    context = StructuredGateContext(
+        X=features.iloc[rows].reset_index(drop=True),
+        y_true=y[rows],
+        y_pred=proba[rows],
+        protected_df=protected.iloc[rows].reset_index(drop=True),
+        predict_fn=lambda frame: np.zeros(len(frame)),
+        task="binary",
+    )
+    report = ModelGate(checks=checks).run(context)
+    return {
+        (r.check_name, r.metadata.get("protected_attr")): (r.flag, r.blocking)
+        for r in report.results
+    }
+
+
+def _interval_checks(mode):
+    """The interval-bearing checks, on the structured extra.
+
+    `disparate_impact` needs fairlearn and `roc_auc` needs scikit-learn, so
+    the split-stability pair skips on a core install rather than measuring the
+    stability of three NOT_APPLICABLE results.
+    """
+    pytest.importorskip("fairlearn", reason="needs the [structured] extra")
+    pytest.importorskip("sklearn", reason="needs the [structured] extra")
+
+    from bdp_model_gate import PerformanceConfig, UncertaintyConfig
+    from bdp_model_gate.structured.calibration_checks import CalibrationCheck
+    from bdp_model_gate.structured.fairness import DisparateImpactCheck
+    from bdp_model_gate.structured.performance import PerformanceThresholdCheck
+
+    performance = PerformanceConfig(metric="roc_auc", min_score=0.70)
+    uncertainty = UncertaintyConfig(on_uncertain=mode, bootstrap_samples=200)
+    return [
+        DisparateImpactCheck(FairnessConfig(), uncertainty),
+        PerformanceThresholdCheck(performance, uncertainty),
+        CalibrationCheck(performance, uncertainty),
+    ]
+
+
+def _disagreements(mode, trials=10):
+    """How many random halvings of the same book give different verdicts."""
+    unstable = []
+    for seed in range(trials):
+        book = _split_stability_book(1200, seed)
+        order = np.random.default_rng(1000 + seed).permutation(1200)
+        checks = _interval_checks(mode)
+        left = _verdicts_on(order[:600], book, checks)
+        right = _verdicts_on(order[600:], book, checks)
+        for key in left.keys() & right.keys():
+            if left[key][0] != right[key][0]:
+                unstable.append((seed, key, left[key], right[key]))
+    return unstable
+
+
+@pytest.mark.real_bootstrap
+def test_intervals_make_the_gate_markedly_more_stable_under_resampling():
+    """The split-stability test `ROADMAP.md` predicted would fail today.
+
+    Halve the same book at random and gate both halves. On the point estimate
+    the two halves disagree on **5 of 10** splits; with intervals, on 1. A
+    gate that flips on resampling teaches people to re-run it until it
+    passes, which protects nobody.
+    """
+    on_point = _disagreements("point")
+    with_intervals = _disagreements("review")
+
+    assert len(on_point) >= 4, f"the point estimate should be unstable here: {on_point}"
+    assert len(with_intervals) < len(on_point) / 2, (
+        f"intervals should halve the instability at least: {len(with_intervals)} vs {len(on_point)}"
+    )
+
+
+@pytest.mark.real_bootstrap
+def test_the_instability_that_remains_never_breaks_a_build():
+    """Intervals do not abolish instability — every threshold rule has a
+    boundary, and near it a resample can still cross.
+
+    What changes is *which* instability is left. With intervals, a verdict
+    that moves between halves moves between `OK` and `UNCERTAIN` — "does a
+    human look at this?" — rather than between `OK` and a blocking risk flag,
+    which is "does the pipeline stop?". That is a far cheaper kind of
+    disagreement, and it is the property worth holding onto.
+    """
+
+    def stops_the_pipeline(verdict):
+        """A result only blocks if it is a *finding* and declares itself
+        blocking. An OK result carries the check's `blocking` value too, and
+        it means nothing there."""
+        flag, blocking = verdict
+        return flag not in ("OK", "NOT_APPLICABLE") and blocking
+
+    unstable = _disagreements("review")
+    assert unstable, "nothing flipped — the fixture is no longer near a boundary"
+    for _seed, key, left, right in unstable:
+        assert {left[0], right[0]} <= {"OK", "UNCERTAIN"}, (
+            f"{key} flipped into a hard finding: {left[0]} vs {right[0]}"
+        )
+        assert not stops_the_pipeline(left) and not stops_the_pipeline(right), (
+            f"{key} flipped into something that stops a build: {left} vs {right}"
+        )

@@ -49,10 +49,11 @@ from ..actuarial import (
     weighted_mean,
     weights_or_ones,
 )
-from ..config import FairnessConfig
+from ..config import FairnessConfig, UncertaintyConfig
 from ..core.base import BaseCheck, CheckResult
 from ..groups import group_series
 from ..task import REGRESSION
+from ..uncertainty import Uncertainty
 
 logger = get_logger("regression_fairness")
 
@@ -108,8 +109,67 @@ class _RegressionFairnessCheck(BaseCheck):
     blocking = False
     supported_tasks = (REGRESSION,)
 
-    def __init__(self, config: FairnessConfig | None = None):
+    def __init__(
+        self,
+        config: FairnessConfig | None = None,
+        uncertainty: UncertaintyConfig | None = None,
+    ):
         self.config = config or FairnessConfig()
+        self.uncertainty = Uncertainty(uncertainty)
+
+    def _gap_interval(self, context, attr, usable, per_row, reference):
+        """A bootstrap interval on the relative gap for one attribute.
+
+        `per_row` is `fn(positions) -> array` giving the quantity being
+        compared, and `reference` is `fn(positions, values, weights) -> float`
+        giving the denominator. Both are the check's own functions, so the
+        interval measures the same gap the verdict came from.
+
+        The group *set* is fixed from the full data rather than re-derived per
+        resample. A resample can push a group under `min_group_size`, and
+        re-filtering would compare a different set of groups in each draw —
+        the interval would then describe a moving statistic rather than the
+        sampling error of a fixed one. Groups that vanish from a resample
+        entirely are skipped for that draw.
+        """
+        weights = self._weights(context)
+        groups = context.protected_df[attr].to_numpy()
+        chosen = [str(g) for g in usable]
+
+        def gap(positions):
+            drawn = groups[positions].astype(str)
+            values = per_row(positions)
+            drawn_weights = weights[positions]
+            per = []
+            for group in chosen:
+                mask = (drawn == group) & np.isfinite(values)
+                if not mask.any():
+                    continue
+                per.append(weighted_mean(values[mask], drawn_weights[mask]))
+            per = [v for v in per if np.isfinite(v)]
+            if len(per) < 2:
+                # Nothing to compare in this draw. Zero rather than an
+                # exception: an uninformative resample is not an error.
+                return 0.0
+            overall = reference(positions, values, drawn_weights)
+            return _relative_gap(pd.Series(per, dtype=float), overall)
+
+        # The weights go into the canonical ordering because two rows with the
+        # same value and different exposure are different observations. They
+        # are **normalised by their mean** first, for two reasons that happen
+        # to want the same thing: a bootstrap only cares about relative
+        # weights, and the 0.5.3 invariants require that exposure in months
+        # and exposure in years produce the same verdict — and that a uniform
+        # exposure column is a no-op. Hashing the raw column would break both.
+        total = float(np.mean(weights))
+        frame = pd.DataFrame(
+            {
+                "value": per_row(np.arange(len(groups))),
+                "group": groups,
+                "w": weights / total if total else weights,
+            }
+        )
+        return self.uncertainty.interval(gap, frame)
 
     @staticmethod
     def _weights(context) -> np.ndarray:
@@ -161,7 +221,21 @@ class GroupMeanGapCheck(_RegressionFairnessCheck):
             context, lambda m: weighted_mean(y_pred[m], weights[m])
         ):
             gap = _relative_gap(means, overall)
-            flag = "MEAN_GAP_RISK" if gap > self.config.mean_gap_threshold else "OK"
+            interval = self._gap_interval(
+                context,
+                attr,
+                list(means.index),
+                lambda positions: y_pred[positions],
+                lambda positions, values, w: weighted_mean(values, w),
+            )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.mean_gap_threshold,
+                point=gap,
+                risk_flag="MEAN_GAP_RISK",
+                blocking=self.blocking,
+            )
+            flag = verdict.flag
             hi, lo = means.idxmax(), means.idxmin()
             results.append(
                 CheckResult(
@@ -171,9 +245,9 @@ class GroupMeanGapCheck(_RegressionFairnessCheck):
                     detail=(
                         f"{attr}: mean prediction spans {means.min():,.2f} ({lo}) to "
                         f"{means.max():,.2f} ({hi}) — {gap:.1%} of the overall mean "
-                        f"{overall:,.2f}{weighted}{note}"
+                        f"{overall:,.2f}{weighted}{note}{verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": attr,
                         "relative_gap": round(gap, 4),
@@ -182,6 +256,7 @@ class GroupMeanGapCheck(_RegressionFairnessCheck):
                         "group_means": {str(k): round(v, 4) for k, v in means.items()},
                         "highest_group": str(hi),
                         "lowest_group": str(lo),
+                        **verdict.metadata,
                     },
                 )
             )
@@ -233,7 +308,21 @@ class ErrorParityCheck(_RegressionFairnessCheck):
             context, lambda m: weighted_mean(abs_err[m], weights[m])
         ):
             gap = _relative_gap(errors, overall)
-            flag = "ERROR_PARITY_RISK" if gap > self.config.error_parity_threshold else "OK"
+            interval = self._gap_interval(
+                context,
+                attr,
+                list(errors.index),
+                lambda positions: abs_err[positions],
+                lambda positions, values, w: weighted_mean(values, w),
+            )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.error_parity_threshold,
+                point=gap,
+                risk_flag="ERROR_PARITY_RISK",
+                blocking=self.blocking,
+            )
+            flag = verdict.flag
             worst = errors.idxmax()
             results.append(
                 CheckResult(
@@ -243,9 +332,9 @@ class ErrorParityCheck(_RegressionFairnessCheck):
                     detail=(
                         f"{attr}: mean absolute error spans {errors.min():,.2f} to "
                         f"{errors.max():,.2f} (worst: {worst}) — {gap:.1%} of the overall "
-                        f"MAE {overall:,.2f}{weighted}{note}"
+                        f"MAE {overall:,.2f}{weighted}{note}{verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": attr,
                         "relative_gap": round(gap, 4),
@@ -253,6 +342,7 @@ class ErrorParityCheck(_RegressionFairnessCheck):
                         "exposure_weighted": bool(weighted),
                         "group_mae": {str(k): round(v, 4) for k, v in errors.items()},
                         "worst_served_group": str(worst),
+                        **verdict.metadata,
                     },
                 )
             )
@@ -304,7 +394,21 @@ class CalibrationParityCheck(_RegressionFairnessCheck):
             context, lambda m: weighted_mean(residual[m], weights[m])
         ):
             gap = _relative_gap(bias, overall_actual)
-            flag = "CALIBRATION_RISK" if gap > self.config.calibration_threshold else "OK"
+            interval = self._gap_interval(
+                context,
+                attr,
+                list(bias.index),
+                lambda positions: residual[positions],
+                lambda positions, values, w: weighted_mean(y_true[positions], w),
+            )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.calibration_threshold,
+                point=gap,
+                risk_flag="CALIBRATION_RISK",
+                blocking=self.blocking,
+            )
+            flag = verdict.flag
             over, under = bias.idxmax(), bias.idxmin()
             results.append(
                 CheckResult(
@@ -315,9 +419,9 @@ class CalibrationParityCheck(_RegressionFairnessCheck):
                         f"{attr}: prediction bias spans {bias.min():,.2f} ({under}, "
                         f"under-predicted) to {bias.max():,.2f} ({over}, over-predicted) "
                         f"— {gap:.1%} of the overall actual mean "
-                        f"{overall_actual:,.2f}{weighted}{note}"
+                        f"{overall_actual:,.2f}{weighted}{note}{verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": attr,
                         "relative_gap": round(gap, 4),
@@ -326,6 +430,7 @@ class CalibrationParityCheck(_RegressionFairnessCheck):
                         "group_bias": {str(k): round(v, 4) for k, v in bias.items()},
                         "most_over_predicted": str(over),
                         "most_under_predicted": str(under),
+                        **verdict.metadata,
                     },
                 )
             )
@@ -494,7 +599,26 @@ class LossRatioParityCheck(_RegressionFairnessCheck):
             if len(ratios) < 2:
                 continue
             gap = _relative_gap(ratios, overall)
-            flag = "LOSS_RATIO_RISK" if gap > self.config.loss_ratio_threshold else "OK"
+            # Rows with a non-positive expected loss carry no margin ratio, so
+            # they are NaN here. The gap helper drops non-finite values per
+            # draw, which is the same treatment the point estimate gives them.
+            interval = self._gap_interval(
+                context,
+                attr,
+                list(ratios.index),
+                lambda positions: ratio[positions],
+                lambda positions, values, w: weighted_mean(
+                    values[np.isfinite(values)], w[np.isfinite(values)]
+                ),
+            )
+            verdict = self.uncertainty.verdict(
+                interval,
+                self.config.loss_ratio_threshold,
+                point=gap,
+                risk_flag="LOSS_RATIO_RISK",
+                blocking=self.blocking,
+            )
+            flag = verdict.flag
             hi, lo = ratios.idxmax(), ratios.idxmin()
             results.append(
                 CheckResult(
@@ -505,9 +629,9 @@ class LossRatioParityCheck(_RegressionFairnessCheck):
                         f"{attr}: premium-to-expected-loss ratio spans {ratios.min():.3f} "
                         f"({lo}) to {ratios.max():.3f} ({hi}) — {gap:.1%} of the overall "
                         f"ratio {overall:.3f}; {hi} carries the higher margin over its "
-                        f"own expected cost{weighted}{note}"
+                        f"own expected cost{weighted}{note}{verdict.note}"
                     ),
-                    blocking=self.blocking,
+                    blocking=verdict.blocking,
                     metadata={
                         "protected_attr": attr,
                         "relative_gap": round(gap, 4),
@@ -517,6 +641,7 @@ class LossRatioParityCheck(_RegressionFairnessCheck):
                         "highest_margin_group": str(hi),
                         "lowest_margin_group": str(lo),
                         "rows_ignored": n_dropped,
+                        **verdict.metadata,
                     },
                 )
             )

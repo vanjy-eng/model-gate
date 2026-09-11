@@ -62,21 +62,21 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         ValidationStrategyCheck(config.validation, config.compliance),
         FeatureContractCheck(config.validation),
         FeatureDriftCheck(config.validation),
-        ProxyCorrelationCheck(config.fairness),
-        DisparateImpactCheck(config.fairness),
-        ShapSubgroupCheck(config.fairness),
-        CounterfactualFlipCheck(config.fairness),
+        ProxyCorrelationCheck(config.fairness, config.uncertainty),
+        DisparateImpactCheck(config.fairness, config.uncertainty),
+        ShapSubgroupCheck(config.fairness, config.uncertainty),
+        CounterfactualFlipCheck(config.fairness, uncertainty=config.uncertainty),
         # Separation and sufficiency. Reported alongside demographic parity
         # because the three are mutually incompatible — presenting only one
         # would make the choice silently.
-        EqualisedOddsCheck(config.fairness),
-        SubgroupCalibrationCheck(config.fairness),
-        GroupMeanGapCheck(config.fairness),
-        ErrorParityCheck(config.fairness),
-        CalibrationParityCheck(config.fairness),
-        LossRatioParityCheck(config.fairness),
-        PerformanceThresholdCheck(config.performance),
-        CalibrationCheck(config.performance),
+        EqualisedOddsCheck(config.fairness, config.uncertainty),
+        SubgroupCalibrationCheck(config.fairness, config.uncertainty),
+        GroupMeanGapCheck(config.fairness, config.uncertainty),
+        ErrorParityCheck(config.fairness, config.uncertainty),
+        CalibrationParityCheck(config.fairness, config.uncertainty),
+        LossRatioParityCheck(config.fairness, config.uncertainty),
+        PerformanceThresholdCheck(config.performance, config.uncertainty),
+        CalibrationCheck(config.performance, config.uncertainty),
         # The pricing measures. Level, shape and ordering are three
         # independent ways for a premium model to be wrong, and an error
         # metric collapses all three into one number that hides each.

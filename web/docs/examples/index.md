@@ -19,7 +19,9 @@ verdicts, configuration, custom checks, plugins, validation and the CLI. The
 others assume it and focus on what their task or framework changes.
 
 **06 is the other half** — the fourteen charts, why each one is not a number,
-and the self-contained [HTML report](../reference/reports.md) a reviewer signs.
+the self-contained [HTML report](../reference/reports.md) a reviewer signs, and
+the confidence intervals plus the split-stability check that measures what
+they bought.
 
 **07 is the domain case** — the same machinery pointed at a rate filing:
 exposure weighting, actual-vs-expected by decile, the Lorenz Gini against its

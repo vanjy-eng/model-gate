@@ -73,6 +73,11 @@ def pytest_configure(config):
         "markers",
         "expect_check_error: this test deliberately produces a CHECK_ERROR result",
     )
+    config.addinivalue_line(
+        "markers",
+        "real_bootstrap: run with the resample count this test asks for, not the "
+        "suite's reduced one",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +118,64 @@ def _fail_on_unexpected_check_error(request, monkeypatch):
             "@pytest.mark.expect_check_error if that is intended.\n" + lines,
             pytrace=False,
         )
+
+
+# --------------------------------------------------------------------------
+# Bootstrap cost
+# --------------------------------------------------------------------------
+
+
+#: Resamples the suite runs with, against the library's shipped 1,000.
+SUITE_BOOTSTRAP_SAMPLES = 150
+
+
+@pytest.fixture(autouse=True)
+def _cheap_bootstrap(request, monkeypatch):
+    """Lowers `bootstrap_samples` for the suite, and only for the suite.
+
+    The library default is 1,000 resamples, which is the conventional floor
+    for a percentile interval and the right default for a gate that runs once
+    before a deploy. It is the wrong default for a test suite: `roc_auc`
+    measures 1.2 ms a call, so a thousand draws is 1.2 seconds, and
+    `test_model_matrix.py` alone scores twelve model/task combinations. Left
+    alone it doubled the suite from 40 seconds to 85.
+
+    150 draws is plenty for the properties these tests assert — a verdict, an
+    ordering, a width that shrinks with n — and none of them is about
+    percentile precision. The tests that *are* about the interval itself pass
+    an explicit `bootstrap_samples`, so this does not reach them.
+
+    `test_package.py` asserts the library default is still 1,000, so this
+    fixture cannot quietly become the real one.
+
+    Opt out with `@pytest.mark.real_bootstrap` where the resample count is
+    part of what the test is asserting. The proxy grid needs it: the
+    permutation count bounds the smallest reachable q-value, so 150 draws
+    cannot resolve a nine-cell grid at a 5% false-discovery rate and the
+    check correctly refuses to try.
+
+    It clamps `Uncertainty.__init__` rather than the dataclass default,
+    because a dataclass captures its defaults into the generated `__init__`
+    at class-creation time — patching the class attribute afterwards changes
+    nothing, which is exactly the silent no-op the first version of this
+    fixture was. Direct `bootstrap()` calls are untouched, so the tests that
+    are genuinely about the interval keep the sample counts they ask for.
+    """
+    if request.node.get_closest_marker("real_bootstrap"):
+        return
+
+    from dataclasses import replace
+
+    from bdp_model_gate.uncertainty import Uncertainty
+
+    original = Uncertainty.__init__
+
+    def clamped(self, config=None):
+        original(self, config)
+        if self.config.bootstrap_samples > SUITE_BOOTSTRAP_SAMPLES:
+            self.config = replace(self.config, bootstrap_samples=SUITE_BOOTSTRAP_SAMPLES)
+
+    monkeypatch.setattr(Uncertainty, "__init__", clamped)
 
 
 # --------------------------------------------------------------------------

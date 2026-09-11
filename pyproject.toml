@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bdp-model-gate"
-version = "0.5.4"
+version = "0.6.0"
 description = "Automated pre-deployment ML model governance gate: fairness, performance, compliance, and security checks."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -60,19 +60,49 @@ yaml = [
 toml = [
     "tomli>=2.0,<3.0; python_version < '3.11'",
 ]
+# Linters and the type checker, pinned **exactly** and kept out of `dev`.
+#
+# An unpinned linter changes its verdict on unchanged code, so a release
+# months from now goes red on a pull request that touched nothing near the
+# complaint. That has a real cost beyond the confusion: the reflex it teaches
+# is to widen the ignore list.
+#
+# Separate from `dev` because the CI matrix installs `dev` on five
+# interpreters and only ever runs pytest with it — the linters run once, on
+# one version, in one job. Pair with `constraints-lint.txt` for the transitive
+# set: mypy's answers depend on the stubs it resolves, so `pandas-stubs`
+# moving can turn a clean run red just as surely as mypy moving can.
+lint = [
+    "ruff==0.16.4",
+    "mypy==1.20.2",
+    "pandas-stubs",
+    "types-PyYAML>=6.0,<7.0",
+]
 dev = [
     "pytest>=7.0,<9.0",
     "pytest-cov>=4.1,<6.0",
     "build>=1.0,<2.0",
-    "mypy>=1.8,<2.0",
-    "ruff>=0.4,<1.0",
-    "pandas-stubs",
     "hypothesis>=6.100,<7.0",
     "matplotlib>=3.6,<4.0",
     "seaborn>=0.13,<0.15",
-    "mutmut>=3.0,<4.0",
     "pyyaml>=6.0,<7.0",
-    "types-PyYAML>=6.0,<7.0",
+]
+# Mutation testing, and its own extra for two reasons.
+#
+# `scripts/mutmut_decision_surface.py` reaches into mutmut's internals to
+# prune the operator table, so the version has to be exact — a range would let
+# a minor release rename the table and turn the pruning into a silent no-op.
+#
+# And an exact pin cannot live in `dev`: **mutmut 3.7 requires Python 3.10**,
+# while this package supports 3.9, so pinning it there breaks `pip install
+# -e ".[dev]"` on the oldest interpreter in the matrix. The range that used to
+# be there resolved to 3.3.1 on 3.9 and installed fine, which is why the
+# problem arrived with the pin rather than with the dependency.
+#
+# Nothing in the test matrix needs it: mutation testing runs in one advisory
+# job, on one interpreter, and locally when someone is hardening an area.
+mutation = [
+    "mutmut==3.7.0",
 ]
 
 [project.urls]

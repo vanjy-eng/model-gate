@@ -48,6 +48,14 @@ class FairnessConfig:
     loss_ratio_threshold: float = 0.10  # max relative gap in premium-over-expected-loss
     min_group_size: int = 30  # groups smaller than this are reported, not scored
     proxy_corr_threshold: float = 0.30  # eta^2 above this = proxy risk
+    #: False-discovery rate for the proxy grid. `proxy_correlation` tests
+    #: every numeric feature against every protected attribute, so a modest
+    #: frame is forty comparisons and a few will look strong by chance. An
+    #: effect must clear `proxy_corr_threshold` **and** survive
+    #: Benjamini-Hochberg at this rate before it is reported as a finding —
+    #: two conditions, the same shape as `ValidationConfig.leakage_ratio`
+    #: beside `leakage_min_power`.
+    proxy_fdr: float = 0.05
     shap_gap_threshold: float = 0.50  # max cross-group SHAP gap, relative to mean |contribution|
     counterfactual_shift_threshold: float = 0.05  # max prediction shift on attribute flip
 
@@ -207,6 +215,62 @@ class ValidationConfig:
     #: next quarter's business. Enforced only for the high-risk use cases in
     #: `ComplianceConfig`.
     require_out_of_time_for_high_risk: bool = True
+
+
+@dataclass
+class UncertaintyConfig:
+    """How much sampling error the gate accounts for, and what it does when
+    the answer is "we cannot tell".
+
+    Every threshold in this library used to be compared against a point
+    estimate. `FairnessConfig.min_group_size = 30` was the only nod to
+    sampling error, and it is not enough: for a proportion near 0.5, n=30
+    carries a standard error of about 0.09, so the *difference* of two such
+    proportions carries one near 0.13 — against a `disparity_threshold` of
+    0.10 the verdict is noise, and a gate that flips on resampling teaches
+    people to route around it.
+
+    With an interval, where it sits decides the verdict:
+
+    | Interval vs threshold | Verdict |
+    |---|---|
+    | entirely above | the check's risk flag, blocking as it declares |
+    | straddles it | `on_uncertain` decides |
+    | entirely below | OK |
+    """
+
+    #: Off entirely. Bootstrapping is not free, and a team that does not want
+    #: to spend the time should not have to disable the checks to avoid it.
+    compute_intervals: bool = True
+    #: Percentile level for the interval.
+    confidence_level: float = 0.95
+    #: Resamples per statistic. The cost lever, and recorded in metadata so a
+    #: reader knows how much evidence is behind the range.
+    bootstrap_samples: int = 1000
+    #: Below this many rows no interval is computed: resampling twelve rows
+    #: tells you about those twelve rows. The check reports its point estimate
+    #: and says the interval was unavailable.
+    min_rows_for_interval: int = 30
+    #: Seeded so the same data always produces the same interval. Resampling
+    #: is content-addressed on top of this, so row order cannot move a verdict
+    #: either — see `bdp_model_gate.uncertainty`.
+    random_state: int = 42
+
+    #: What a **straddling** interval does. This is the field a team reaches
+    #: for when the tool is in their way, so it is worth being explicit about
+    #: what each value means.
+    #:
+    #: - ``"review"`` (default) — route to a human as a non-blocking
+    #:   ``UNCERTAIN`` finding. A report is something a governance session
+    #:   discusses; a gate breaks a pipeline, and "it might be 0.06 and might
+    #:   be 0.14" is a conversation.
+    #: - ``"block"`` — the precautionary posture. If it *might* breach, stop.
+    #: - ``"point"`` — decide on the point estimate, exactly as releases
+    #:   before 0.6.0 did. **The interval is still computed and still printed**
+    #:   in the detail string and the metadata, so it reaches the governance
+    #:   pack: accepting a risk and not being told about it are different
+    #:   things, and only the first is a decision.
+    on_uncertain: str = "review"
 
 
 @dataclass
@@ -375,3 +439,4 @@ class GateConfig:
     security: SecurityConfig = field(default_factory=SecurityConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
     actuarial: ActuarialConfig = field(default_factory=ActuarialConfig)
+    uncertainty: UncertaintyConfig = field(default_factory=UncertaintyConfig)

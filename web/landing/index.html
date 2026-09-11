@@ -484,7 +484,7 @@
     <a class="wordmark" href="#top">
       <span class="mark" aria-hidden="true"></span>
       BDP Model Gate
-      <span class="version">0.5.4</span>
+      <span class="version">0.6.0</span>
     </a>
     <nav>
       <a href="#start">Getting started</a>
@@ -513,6 +513,14 @@
       Lorenz Gini against the ceiling your book allows, filed monotonicity
       constraints checked by partial dependence, and how much of the book moves
       when a tariff replaces its incumbent.
+    </p>
+    <p class="lede" style="margin-top:.7rem;">
+      Every threshold now carries a <strong>confidence interval</strong>, and
+      where it sits decides the verdict: a finding, a clean pass, or
+      <em>the data cannot say</em> — which is a governance conversation rather
+      than a broken build. On a floor set where a model actually sits, that
+      took a gate from disagreeing with itself on nine of ten random halvings
+      of the same data to none.
     </p>
     <p class="lede" style="margin-top:.7rem;">
       And it tests the generative side-car bolted to your model for
@@ -670,6 +678,7 @@
         <ul>
           <li>Score on a metric you choose — thirteen built in, or your own callable</li>
           <li><code>calibration</code> — do the stated probabilities match reality?</li>
+          <li>Every threshold with a <strong>confidence interval</strong>, and <code>UNCERTAIN</code> when the data cannot decide</li>
           <li>p95 latency against a benchmark run</li>
           <li>Cost per inference</li>
         </ul>
@@ -873,7 +882,7 @@ report.to_json(<span class="c-str">"gate_report.json"</span>)
       </div>
     </div>
     <div class="colophon">
-      <span>BDP Model Gate 0.5.4</span>
+      <span>BDP Model Gate 0.6.0</span>
       <span>Maintained by Vangelis Oden</span>
       <span>MIT</span>
     </div>

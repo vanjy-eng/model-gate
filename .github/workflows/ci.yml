@@ -18,13 +18,23 @@ jobs:
     name: Lint and type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
       - name: Install
-        run: pip install -e ".[dev,structured]"
+        # `[lint]` pins ruff and mypy exactly and the constraints file pins
+        # their transitive set, so this job's verdict depends on the code and
+        # nothing else. `[structured]` is still needed: mypy follows imports
+        # into pandas and numpy.
+        run: pip install -e ".[lint,structured]" -c constraints-lint.txt
+      - name: Versions
+        # Printed so a red run months from now can be compared against a
+        # green one without archaeology.
+        run: |
+          ruff --version
+          mypy --version
       - name: Ruff lint
         run: ruff check .
       - name: Ruff format check
@@ -42,8 +52,8 @@ jobs:
         # imports cleanly against numpy 2.x, so 3.13 is covered too.
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -59,8 +69,8 @@ jobs:
     name: Test (core install only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -109,26 +119,32 @@ jobs:
           PY
 
   mutation:
-    # Non-blocking for now: it reports how many mutants the suite kills, which
-    # is the only real answer to "would my tests have noticed?". Once the score
-    # is known and stable, turn it into a floor.
-    name: Mutation testing (advisory)
+    # Still advisory, but for a different reason than before. The score is now
+    # a rate over a population that *finishes* — see
+    # scripts/mutmut_decision_surface.py — so it is comparable release to
+    # release and a floor is safe to set. It stays non-blocking for one
+    # release so the first few numbers can be read before one becomes a gate.
+    name: Mutation testing (decision surface, advisory)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
       - name: Install
-        run: pip install -e ".[dev,structured]"
+        run: pip install -e ".[dev,mutation,structured]"
       - name: Run mutation testing
-        # Time-boxed: a full run is long and a partial tally is still useful.
-        # `|| true` only tolerates the timeout — the report step below is what
-        # decides whether the run did any real work, because an earlier
-        # version of this job reported green while importing nothing.
-        run: timeout 25m mutmut run --max-children 4 2>&1 | tee mutation.log || true
+        # The decision surface is about 1,880 mutants against 12,436 for the
+        # whole codebase — roughly eleven minutes at the observed throughput,
+        # so the box is now a safety net rather than the thing that decides
+        # which mutants get run. `|| true` still only tolerates a timeout; the
+        # report step decides whether the run did real work, because an
+        # earlier version of this job reported green while importing nothing.
+        run: |
+          timeout 25m python scripts/mutmut_decision_surface.py run --max-children 4 \
+            2>&1 | tee mutation.log || true
 
       - name: Report
         run: |
@@ -155,8 +171,8 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip

@@ -1,0 +1,90 @@
+# Would the *latest* linters still pass?
+#
+# `pyproject.toml` pins ruff and mypy exactly so that an upgrade cannot turn a
+# pull request red for reasons unrelated to it. The cost of that is drift: pin
+# and forget, and the upgrade arrives eventually as a wall of unrelated
+# complaints on whoever happens to bump it.
+#
+# This job runs the pinned tooling's newest release once a week, does not gate
+# anything, and writes what it finds to the run summary. An upgrade then
+# arrives as a decision someone takes on a quiet Monday rather than a surprise
+# in the middle of a release.
+name: Latest tooling (advisory)
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest:
+    name: Latest ruff and mypy (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install the package, then the newest linters over the pins
+        run: |
+          pip install -e ".[lint,structured]"
+          pip install --upgrade ruff mypy
+
+      - name: Report what is pinned against what is available
+        run: |
+          {
+            echo "### Latest tooling"
+            echo
+            echo '| tool | pinned | latest |'
+            echo '|---|---|---|'
+            for tool in ruff mypy; do
+              pinned=$(grep -oE "\"$tool==[0-9.]+\"" pyproject.toml | tr -d '"' | cut -d= -f3)
+              latest=$($tool --version | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
+              echo "| $tool | ${pinned:-?} | ${latest:-?} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ruff lint
+        id: ruff_lint
+        continue-on-error: true
+        run: ruff check . 2>&1 | tee /tmp/ruff-check.txt
+
+      - name: Ruff format check
+        id: ruff_format
+        continue-on-error: true
+        run: ruff format --check . 2>&1 | tee /tmp/ruff-format.txt
+
+      - name: Mypy
+        id: mypy
+        continue-on-error: true
+        run: mypy bdp_model_gate 2>&1 | tee /tmp/mypy.txt
+
+      - name: Summarise
+        run: |
+          {
+            echo
+            echo "| step | outcome |"
+            echo "|---|---|"
+            echo "| ruff check | ${{ steps.ruff_lint.outcome }} |"
+            echo "| ruff format | ${{ steps.ruff_format.outcome }} |"
+            echo "| mypy | ${{ steps.mypy.outcome }} |"
+            echo
+            for f in /tmp/ruff-check.txt /tmp/ruff-format.txt /tmp/mypy.txt; do
+              if [ -s "$f" ]; then
+                echo "<details><summary>$(basename "$f")</summary>"
+                echo
+                echo '```'
+                head -60 "$f"
+                echo '```'
+                echo
+                echo "</details>"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

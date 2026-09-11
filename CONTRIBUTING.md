@@ -39,13 +39,21 @@ git clone https://github.com/vanjy-eng/model-gate.git
 cd model-gate
 
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,structured,plots,yaml,toml]"
+pip install -e ".[dev,lint,structured,plots,yaml,toml]" -c constraints-lint.txt
 
 pip install pre-commit && pre-commit install
 ```
 
 Install all the extras for development even though they are optional at
 runtime: `dev` alone will silently skip the plotting tests.
+
+`lint` is separate from `dev` and pins **ruff and mypy exactly**, with
+`constraints-lint.txt` pinning their transitive set. An unpinned linter
+changes its verdict on unchanged code, so a release months from now goes red
+on a pull request that touched nothing near the complaint — and the reflex
+that teaches is to widen the ignore list. The `-c` flag matters: mypy's
+answers depend on the stub packages it resolves, so `pandas-stubs` moving can
+turn a clean run red just as surely as mypy moving can.
 
 Python 3.9–3.13 are supported. Develop on whichever you have — the CI matrix
 covers the range, and [one gotcha](#the-python-39-floor) is worth knowing
@@ -60,8 +68,16 @@ mypy bdp_model_gate       # type check
 pytest -q                 # test — 85% coverage floor is enforced
 ```
 
-`.pre-commit-config.yaml` runs ruff, mypy and basic hygiene on every commit and
-mirrors CI, so most failures surface before you push.
+`.pre-commit-config.yaml` runs ruff, mypy and basic hygiene on every commit
+and mirrors CI, so most failures surface before you push. Its revs must equal
+the exact pins in the `lint` extra — until 0.6.0 they did not, and a
+developer running pre-commit could be arguing with a different linter than the
+one that failed their build. `tests/test_package.py` asserts they agree.
+
+A weekly, non-blocking **Latest tooling** workflow runs the newest ruff and
+mypy against the tree and writes what it finds to the run summary. An upgrade
+then arrives as a decision someone takes on a quiet Monday rather than a wall
+of unrelated complaints in the middle of a release.
 
 Two notes on the tooling:
 
@@ -100,6 +116,7 @@ production — one broken check must not take down the gate — and it is why
 **fails any test that produced a `CHECK_ERROR` it did not ask for**. When the
 error is the thing under test, opt out explicitly:
 
+<!-- pseudo-code: illustrative, not runnable -->
 ```python
 @pytest.mark.expect_check_error
 def test_a_broken_check_does_not_crash_the_gate(...):
@@ -132,9 +149,31 @@ them: 0.5.2 killed 286 more mutants than 0.5.1 and still scored 0.7 points
 lower.
 
 ```bash
-mutmut run 2>&1 | tee mutation.log
+pip install -e ".[mutation]"          # needs Python 3.10+
+python scripts/mutmut_decision_surface.py run 2>&1 | tee mutation.log
 python scripts/mutation_report.py mutation.log --min-tested 200
 ```
+
+`mutation` is its own extra rather than part of `dev`, because the pin has to
+be exact — the script reaches into mutmut's internals — and **mutmut 3.7
+requires Python 3.10** while this package supports 3.9. An exact pin in `dev`
+breaks `pip install -e ".[dev]"` on the oldest interpreter in the matrix, which
+is how it broke once.
+
+**Run it through `scripts/mutmut_decision_surface.py`, not `mutmut` directly.**
+The whole-codebase pass generates 12,436 mutants, of which only 1,700 — 14% —
+can produce a wrong verdict. `arg_removal` is 48% of the population and most
+of its targets are required positionals whose removal raises `TypeError`, so
+they are free kills that inflate the score; `string` is another 28%, mutating
+prose detail strings and scoring on whether some test happens to assert that
+substring. The script prunes the operator table to the four operators that
+flip a comparison, shift a threshold or invert a boolean — which is this
+project's stated failure mode written as mutations — leaving about 1,880
+mutants and a run that finishes in roughly eleven minutes.
+
+Finishing is the point. A rate over a population that times out is a rate over
+whichever third of it the clock reached, which is why the old numbers could go
+*down* while killing 286 more mutants.
 
 It is advisory in CI (`continue-on-error`), time-boxed to 25 minutes, and slow
 locally — nobody expects you to run it on every change. It is the right tool
@@ -529,7 +568,17 @@ separate docs change. If the number was wrong *before* the release, it is a
 
 ## Pull requests
 
-The `main` branch requires a PR — direct pushes are blocked by a ruleset.
+Every change reaches `main` through a PR.
+
+!!! note
+    That is currently a **convention, not enforcement.** The `main-lock`
+    ruleset was written to block direct pushes and its ref condition is
+    `refs/heads/"main"` — with literal quote characters — so it matches no
+    branch that exists and has never applied to anything. It also carries no
+    required-status-check rule, so a red matrix would not block a merge
+    either. Both are the first item in [`ROADMAP.md`](ROADMAP.md). Until they
+    are fixed, treat the rules below as binding on yourself, because nothing
+    else is.
 
 1. Branch from an up-to-date `main`, named per [Branches](#branches) above.
 2. Make the change, with tests.

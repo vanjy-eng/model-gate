@@ -188,8 +188,17 @@ def test_subgroup_calibration_is_non_blocking():
 # --- EqualisedOddsCheck (separation) -----------------------------------------
 
 
-def _separation_frame(tpr_a, tpr_b, fpr_a=0.2, fpr_b=0.2, per_group=500, seed=6):
-    """Builds a book with exactly the requested per-group error rates."""
+def _separation_frame(tpr_a, tpr_b, fpr_a=0.2, fpr_b=0.2, per_group=2000, seed=6):
+    """Builds a book with exactly the requested per-group error rates.
+
+    `per_group` was 500 until 0.6.0, and that is 250 positives per group — a
+    standard error of 0.036 on the TPR difference, so the 95% interval reaches
+    past the 0.10 threshold and every verdict here was noise. The tests below
+    are about which fairness *notion* a model fails, not about sample size, so
+    the fixture now carries enough rows to resolve its own threshold.
+    `test_the_noise_floor_at_the_old_fixture_size` keeps the old size around as
+    the thing it actually demonstrates.
+    """
     rng = np.random.default_rng(seed)
     rows = []
     for group, tpr, fpr in (("A", tpr_a, fpr_a), ("B", tpr_b, fpr_b)):
@@ -313,3 +322,31 @@ def test_an_intersection_can_fail_where_both_margins_pass():
     intersect = [r for r in joint if "×" in r.metadata.get("protected_attr", "")]
     assert intersect, "the intersection should have been evaluated"
     assert any(r.flag != "OK" for r in intersect), "the intersection should be flagged"
+
+
+def test_the_noise_floor_at_the_old_fixture_size():
+    """Why `_separation_frame` grew in 0.6.0.
+
+    500 rows per group is 250 positives, giving a standard error of 0.036 on
+    the TPR difference — so the 95% interval on a model with *identical* error
+    rates reaches past the 0.10 threshold. The interval says so; the point
+    estimate could not.
+
+    The upper bound matches 1.96 x SE added to the observed gap, which is how
+    we know the width is real and not an artefact of bootstrapping a folded
+    max-minus-min statistic.
+    """
+    frame = _separation_frame(tpr_a=0.8, tpr_b=0.8, per_group=500)
+    results = EqualisedOddsCheck().run(
+        _ctx(frame["p"], frame["y"], pd.DataFrame({"g": frame["g"]}))
+    )
+    opportunity = next(r for r in results if r.metadata["notion"] == "equal_opportunity")
+
+    assert opportunity.flag == "UNCERTAIN"
+    assert opportunity.blocking is False
+    assert opportunity.metadata["ci_high"] > opportunity.metadata["threshold"]
+    assert "cannot rule out a breach" in opportunity.detail
+
+    analytic_se = (2 * 0.8 * 0.2 / 250) ** 0.5
+    expected_reach = opportunity.metadata["tpr_difference"] + 1.96 * analytic_se
+    assert opportunity.metadata["ci_high"] == pytest.approx(expected_reach, abs=0.02)

@@ -80,6 +80,9 @@ VALID_FLAGS = {
     "INJECTION_NEEDS_JUDGEMENT",
     "PII_ECHO_RISK",
     "REPORT_INJECTION_RISK",
+    # 0.6.0 — sampling error. One flag across the suite, meaning "the data
+    # cannot decide this"; `check_name` says which check it came from.
+    "UNCERTAIN",
 }
 
 CLASSIFIERS = {
