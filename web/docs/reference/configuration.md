@@ -22,6 +22,10 @@ report = ModelGate(checks=default_structured_checks(config)).run(context)
 |---|---|---|
 | `leakage_ratio` | `0.95` | a feature is suspect at this fraction of the model's own predictive power |
 | `leakage_min_power` | `0.80` | ...and only if it clears this absolutely. Both must hold |
+| `combined_leakage_combo_sizes` | `(2,)` | column-subset sizes `combined_feature_leakage` tests; add `3` for triples |
+| `combined_leakage_cv_folds` | `5` | folds for the out-of-fold power estimate a combination is scored with |
+| `combined_leakage_max_features` | `30` | above this many candidates, only the highest-individual-power ones are combined |
+| `combined_leakage_skip_covered_features` | `True` | drop a column already flagged alone by `target_leakage` from the candidate pool |
 | `max_split_overlap` | `0.01` | validation rows also present in `X_train` |
 | `max_duplicate_fraction` | `0.05` | exact duplicate rows *within* the validation set |
 | `drift_threshold` | `0.25` | standardised mean shift, numeric features |
@@ -35,7 +39,9 @@ to reach for if it is noisy. Parity between a feature and the model only means
 something when the model is good: against a model scoring 0.55, a feature
 scoring 0.54 reaches 98% of it and means nothing at all. Both conditions are
 required precisely so a weak model does not make every column look like a
-leak.
+leak. `combined_feature_leakage` reuses both fields as its own threshold —
+the question is identical, only whether it's measuring one column or a
+small combination of them differs.
 
 `max_split_overlap` is deliberately not zero. Identical feature vectors recur
 legitimately in data with few categorical levels, and the check says so when

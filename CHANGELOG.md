@@ -6,6 +6,60 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+A leak split across two columns, neither of which looks like one.
+
+`LeakageCheck` asks whether a single column's solo predictive power rivals
+the model's own. It cannot see a leak built from a *combination* of columns,
+each individually unremarkable — and that gap is not hypothetical: a public
+supply-chain dataset's own late-delivery label is defined by comparing two
+of its own columns, each unremarkable alone (power 0.40, half of
+`LeakageCheck`'s 0.80 floor) but near-exact combined (0.94). A model trained
+on both benchmarks 0.24 ROC AUC higher than the same model without one of
+them — arithmetic, not model skill. Full case study, numbers and a live
+demo: see [`combined_feature_leakage`](https://vanjy-eng.github.io/model-gate/docs/reference/checks/#combined_feature_leakage)
+in the docs, and [`examples/10_combined_feature_leakage.ipynb`](examples/10_combined_feature_leakage.ipynb)
+for a runnable, synthetic-data reproduction in this repo.
+
+### Added
+- **`CombinedFeatureLeakageCheck`** — generalises `LeakageCheck` from single
+  columns to small combinations of them (pairs by default, triples
+  configurable). A plain least-squares combination of each candidate subset
+  is fit and scored **out-of-fold**, never in-sample, so a flag reflects
+  reusable signal rather than a fit's freedom to find *some* line through the
+  data. Fold assignment is deterministic — derived from row content via
+  `bdp_model_gate.uncertainty.canonical_order`, the same ordering the
+  bootstrap already resamples over — so permuting the validation frame
+  cannot move a row into a different fold or change a verdict. Columns
+  `LeakageCheck` would already flag alone are dropped from the candidate
+  pool by default (`combined_leakage_skip_covered_features`), so every
+  finding from this check is something that check could not have told you.
+  Datetime, unsigned-integer and boolean columns are now candidates too, not
+  only signed numeric ones — the same gap `LeakageCheck`'s own `_power` had,
+  fixed in the one place both checks share it.
+- **Non-blocking.** Two columns matching the model's power is the ordinary
+  shape of a parsimonious, honest model, not only of a leak — a model with
+  no leak at all, whose signal genuinely is two strong real features, reads
+  identically to one here. The asymmetry that makes `LeakageCheck` safe to
+  block on (one feature rivaling the model is rare) does not hold for pairs
+  (common, for a scorecard or any deliberately simple model), so a finding
+  here routes to a human instead, the same way `FeatureDriftCheck`'s does.
+- A correlated cluster of features that all pair well with one driver is
+  now one finding, not one per surviving pair: the strongest combination is
+  reported, and anything else sharing a column with it is folded into that
+  result's `metadata` rather than reported again.
+- Five new `ValidationConfig` fields: `combined_leakage_combo_sizes`,
+  `combined_leakage_cv_folds`, `combined_leakage_max_features`,
+  `combined_leakage_skip_covered_features`, `combined_leakage_max_rows`
+  (subsamples the combination search above this many rows — the cost that
+  scales with combinations × folds — via `stable_sample`, so it stays
+  order-invariant). `leakage_ratio` and `leakage_min_power` are reused as
+  this check's threshold too — the underlying question is identical, only
+  what is being measured differs. A `combined_leakage_combo_sizes` entry
+  below 2 is rejected with `GateConfigurationError` at construction.
+
+### Changed
+- The default suite is 34 checks across six categories, up from 33.
+
 ## [0.7.0] - 2026-10-15
 
 Champion against challenger — and making the mutation score mean what it says.

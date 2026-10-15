@@ -83,6 +83,9 @@ VALID_FLAGS = {
     # 0.6.0 — sampling error. One flag across the suite, meaning "the data
     # cannot decide this"; `check_name` says which check it came from.
     "UNCERTAIN",
+    # 0.7.0 — combined-feature leakage: a pair of columns reconstructs the
+    # target out-of-fold even though neither does alone.
+    "COMBINED_LEAKAGE_RISK",
 }
 
 CLASSIFIERS = {

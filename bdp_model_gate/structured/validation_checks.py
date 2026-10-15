@@ -11,38 +11,50 @@ finding says *you do not yet know whether it is*, which is a different
 sentence and a strictly prior one — so `validation` is reported first, and
 these checks block.
 
-Five questions:
+Six questions:
 
     LeakageCheck             Does one column do what the whole model does?
+    CombinedFeatureLeakageCheck  Does a small *combination* of columns do
+                             what the whole model does, even though none of
+                             them does alone?
     SplitOverlapCheck        Has the model already seen these rows?
     ValidationStrategyCheck  Was the holdout separated in time, or at random?
     FeatureContractCheck     Are the columns the ones the model was fitted on,
                              in the order it expects them?
     FeatureDriftCheck        Does validation still look like training?
 
-All five degrade to `NOT_APPLICABLE` with a reason when their inputs are
-absent, and all five work on a core install — a validation set that is
+All six degrade to `NOT_APPLICABLE` with a reason when their inputs are
+absent, and all six work on a core install — a validation set that is
 secretly the training set is the last thing that should go unchecked because
 scikit-learn is missing.
 """
 
 from __future__ import annotations
 
+from itertools import combinations
+
 import numpy as np
 import pandas as pd
 
 from .._logging import get_logger
+from .._sampling import stable_sample
 from ..classes import favourable_mask, resolve_favourable
 from ..config import ComplianceConfig, ValidationConfig
 from ..core.base import BaseCheck, CheckResult
+from ..exceptions import GateConfigurationError
 from ..metrics import to_class_labels
 from ..stats import correlation_ratio, pearson_r, rank_auc
-from ..task import MULTICLASS, REGRESSION, resolve_task
+from ..task import ALL_TASKS, MULTICLASS, REGRESSION, resolve_task
+from ..uncertainty import canonical_order
 
 logger = get_logger("validation_checks")
 
 #: Below this many usable rows a per-feature statistic is noise, not evidence.
 _MIN_ROWS = 20
+#: A combination needs enough rows per cross-validation fold for the fit
+#: itself to mean anything, not just enough rows overall — stricter than
+#: _MIN_ROWS for exactly that reason. See CombinedFeatureLeakageCheck.
+_MIN_ROWS_PER_FOLD = 10
 
 
 def _not_applicable(check: BaseCheck, reason: str) -> list[CheckResult]:
@@ -112,7 +124,11 @@ def _power(column: pd.Series, target: np.ndarray, binary: bool) -> float | None:
         return None
     values, y = column[usable], target[usable]
 
-    if values.dtype.kind not in "if":
+    # "ifub": signed int, float, unsigned int, bool — every dtype a plain
+    # numeric cast handles correctly. Unsigned ints and bools used to fall
+    # through to the categorical branch below, which is wrong for them (an
+    # identifier-style column they are not) rather than merely imprecise.
+    if values.dtype.kind not in "ifub":
         # eta, not eta²: the square root puts it on the same footing as |r|,
         # both being the fraction of the target's spread the column accounts
         # for rather than the fraction of its variance.
@@ -244,6 +260,353 @@ class LeakageCheck(BaseCheck):
             )
             for feature, power in sorted(suspects, key=lambda pair: -pair[1])
         ]
+
+
+def _already_covered(power: float | None, model_power: float, config: ValidationConfig) -> bool:
+    """Whether LeakageCheck would already flag this column alone — the test
+    CombinedFeatureLeakageCheck uses to keep its findings disjoint from
+    LeakageCheck's."""
+    if power is None:
+        return False
+    return power >= config.leakage_min_power and power >= config.leakage_ratio * model_power
+
+
+def _fold_ids(frame: pd.DataFrame, k: int) -> np.ndarray:
+    """Deterministic, order-invariant fold id (0..k-1) per row.
+
+    Built from `canonical_order` — rows sorted by content, not position — the
+    same ordering the bootstrap in `bdp_model_gate.uncertainty` resamples
+    over, so permuting the validation frame cannot move a row into a
+    different fold and therefore cannot change the verdict.
+    """
+    order = canonical_order(frame)
+    fold_of_position = np.empty(len(frame), dtype=int)
+    fold_of_position[order] = np.arange(len(frame)) % k
+    return fold_of_position
+
+
+def _oof_combo_power(
+    columns: pd.DataFrame, target: np.ndarray, binary: bool, k: int
+) -> float | None:
+    """Out-of-fold power of a least-squares combination of `columns`, on the
+    same 0-1 scale `_power` reports for a single column.
+
+    Each fold's rows are scored from a fit that never saw them: `beta` comes
+    from `np.linalg.lstsq` on the other folds, and the held-out fold's score
+    is `[1, columns] @ beta`. Returns None if any fold is too small to fit, or
+    the pooled out-of-fold scores carry no computable power.
+    """
+    n = len(columns)
+    folds = _fold_ids(columns, k)
+    design = np.column_stack([np.ones(n), columns.to_numpy(dtype=float)])
+    oof = np.full(n, np.nan)
+
+    for fold in range(k):
+        test = folds == fold
+        train = ~test
+        if train.sum() < design.shape[1] + _MIN_ROWS_PER_FOLD or test.sum() == 0:
+            return None
+        beta, *_ = np.linalg.lstsq(design[train], target[train], rcond=None)
+        oof[test] = design[test] @ beta
+
+    if np.isnan(oof).any():
+        return None
+    if binary:
+        auc = rank_auc(target, oof)
+        return None if np.isnan(auc) else abs(2 * auc - 1)
+    return abs(pearson_r(oof, target))
+
+
+#: Dtype kinds `CombinedFeatureLeakageCheck` treats as fittable directly:
+#: signed/unsigned int, float, bool. Datetime64 ("M") is also a candidate,
+#: converted to epoch-nanosecond ints first — see `_as_fittable`.
+_FITTABLE_KINDS = "ifub"
+
+
+def _as_fittable(series: pd.Series) -> pd.Series:
+    """A numeric/bool column unchanged; a datetime64 column converted to
+    epoch nanoseconds, so a combination can be fit on it like any other
+    numeric column. Two scheduled-vs-realised timestamp columns are at least
+    as plausible a leak shape as two integer day-counts — the DataCo case
+    this check was built around is usually stored exactly that way — and
+    before this conversion they were invisible to it."""
+    if series.dtype.kind == "M":
+        return series.astype("int64")
+    return series
+
+
+class CombinedFeatureLeakageCheck(BaseCheck):
+    """Does a small *combination* of columns do what the whole model does?
+
+    `LeakageCheck` asks this question for one column at a time, which misses
+    a leak split across several unremarkable-looking columns — the shape
+    this check targets. The motivating case: DataCo Supply Chain's own
+    `Late_delivery_risk` label is defined by comparing two shipping-day
+    columns against each other. Scored individually, each reaches barely
+    half of `LeakageCheck`'s default threshold (power 0.40 apiece); their
+    difference alone reaches 0.94 and a sign rule built from it scores 97.5%
+    accuracy, because that comparison is how the label was derived upstream
+    of the dataset. `LeakageCheck` reports `OK` on that validation set;
+    this check reports both columns together as the leak, by name.
+
+    For every candidate pair (and, if configured, triple) of numeric
+    features, a plain least-squares combination of them is fit and scored
+    **out-of-fold** — never in-sample, so a flag reflects reusable signal
+    rather than the fit's own freedom to find *some* line through the data —
+    on the same 0-1 power scale `LeakageCheck` already reports, so the two
+    checks' numbers are directly comparable.
+
+    The candidate pool deliberately excludes any column `LeakageCheck` would
+    already flag alone: a pair built from one already-flagged column is not
+    an independent finding, and this check's job is to surface only what a
+    single-column test could not have told you. Past
+    `ValidationConfig.combined_leakage_max_features` candidate columns, only
+    the ones with the highest individual power are combined — the same
+    trade-off `ProxyCorrelationCheck` makes for its own comparison grid.
+
+    **Non-blocking.** Two columns rivaling the model's power is the normal
+    shape of a parsimonious, well-built model, not only of a leak — a model
+    with no leak at all, whose signal genuinely is two strong real features,
+    reads identically to one here. `LeakageCheck` earns blocking status
+    because *one* feature matching the model is rare and nearly always a
+    real leak; that asymmetry does not hold for pairs, which is common for
+    scorecards, fraud-velocity rules and any deliberately parsimonious
+    model. A finding here is "go look at these two columns", a judgement
+    call in the same shape `FeatureDriftCheck`'s is — so it routes to a
+    human instead of blocking a model that may be doing exactly what it
+    should.
+    """
+
+    name = "combined_feature_leakage"
+    category = "validation"
+    blocking = False
+    supported_tasks = ALL_TASKS
+
+    def __init__(self, config: ValidationConfig | None = None):
+        self.config = config or ValidationConfig()
+        for size in self.config.combined_leakage_combo_sizes:
+            if size < 2:
+                raise GateConfigurationError(
+                    f"validation.combined_leakage_combo_sizes contains {size!r} — every "
+                    "size must be at least 2, since a 'combination' of one column is "
+                    "just a column, and LeakageCheck already asks that question"
+                )
+
+    def run(self, context) -> list[CheckResult]:
+        cfg = self.config
+        if context.y_true is None or context.y_pred is None:
+            return _not_applicable(
+                self,
+                "no y_true/y_pred — combined-feature leakage is measured by comparing "
+                "a fitted combination of features against the model's own power",
+            )
+
+        task = resolve_task(context)
+        binary = task != REGRESSION
+        if binary:
+            reduced = _binary_target(context, task)
+            if reduced is None:
+                return _not_applicable(
+                    self,
+                    "multiclass combined-feature leakage needs context.class_order or "
+                    "context.favourable_classes, so the target can be reduced to the "
+                    "one outcome a combination might be leaking",
+                )
+            target = reduced
+        else:
+            target = np.asarray(context.y_true, dtype=float)
+
+        scores = _model_score(context, task)
+        if scores is None:
+            return _not_applicable(
+                self,
+                "could not reduce y_pred to a single score to compare combinations "
+                "against — for multiclass, set context.class_order",
+            )
+        model_power = _power(pd.Series(scores, index=context.X.index), target, binary)
+        if model_power is None or model_power <= 0:
+            return _not_applicable(
+                self,
+                "the model's predictions carry no signal against y_true, so there is "
+                "nothing for a combination to be suspiciously close to",
+            )
+
+        numeric_cols = [
+            c
+            for c in context.X.columns
+            if context.X[c].dtype.kind in _FITTABLE_KINDS or context.X[c].dtype.kind == "M"
+        ]
+        if len(numeric_cols) < 2:
+            return _not_applicable(
+                self, "fewer than two numeric feature columns — nothing to combine"
+            )
+
+        usable = context.X[numeric_cols].notna().all(axis=1) & pd.notna(pd.Series(target))
+        min_rows = max(_MIN_ROWS, cfg.combined_leakage_cv_folds * (2 + _MIN_ROWS_PER_FOLD))
+        if int(usable.sum()) < min_rows:
+            return _not_applicable(
+                self,
+                f"fewer than {min_rows} fully-populated numeric rows (need enough per "
+                f"fold for a {cfg.combined_leakage_cv_folds}-fold out-of-fold fit to "
+                "mean anything)",
+            )
+
+        Xu = context.X.loc[usable, numeric_cols].reset_index(drop=True)
+        for c in numeric_cols:
+            Xu[c] = _as_fittable(Xu[c])
+        yu = np.asarray(target)[usable.to_numpy()]
+
+        individual_power = {c: _power(Xu[c], yu, binary) for c in numeric_cols}
+        candidates = numeric_cols
+        if cfg.combined_leakage_skip_covered_features:
+            candidates = [
+                c for c in candidates if not _already_covered(individual_power[c], model_power, cfg)
+            ]
+        if len(candidates) < 2:
+            return _not_applicable(
+                self,
+                "fewer than two candidate columns remain once columns LeakageCheck "
+                "would already flag alone are set aside — nothing novel left to combine",
+            )
+
+        if len(candidates) > cfg.combined_leakage_max_features:
+            ranked = sorted(candidates, key=lambda c: -(individual_power[c] or 0.0))
+            logger.warning(
+                "%s: %d candidate column(s) exceeds combined_leakage_max_features=%d — "
+                "scoring only the %d with the highest individual power.",
+                self.name,
+                len(candidates),
+                cfg.combined_leakage_max_features,
+                cfg.combined_leakage_max_features,
+            )
+            candidates = ranked[: cfg.combined_leakage_max_features]
+
+        # Subsampled only for the fit-and-score loop below, which is what
+        # actually costs O(combinations × folds) — individual_power and the
+        # candidate ranking above already ran on the full usable data, so
+        # this does not change which columns were considered, only how many
+        # rows each combination's fit sees.
+        fit_rows = Xu[candidates]
+        fit_target = yu
+        if len(fit_rows) > cfg.combined_leakage_max_rows:
+            sample_key = "__bdp_combined_leakage_target__"
+            sampled = stable_sample(
+                fit_rows.assign(**{sample_key: fit_target}), cfg.combined_leakage_max_rows
+            )
+            fit_target = sampled.pop(sample_key).to_numpy()
+            fit_rows = sampled.reset_index(drop=True)
+            logger.debug(
+                "%s: subsampled %d of %d usable rows (combined_leakage_max_rows=%d) for "
+                "the combination search",
+                self.name,
+                len(fit_rows),
+                len(Xu),
+                cfg.combined_leakage_max_rows,
+            )
+
+        suspects: list[tuple[tuple[str, ...], float]] = []
+        n_tested = 0
+        for size in cfg.combined_leakage_combo_sizes:
+            if size > len(candidates):
+                continue
+            for combo in combinations(candidates, size):
+                n_tested += 1
+                power = _oof_combo_power(
+                    fit_rows[list(combo)], fit_target, binary, cfg.combined_leakage_cv_folds
+                )
+                if power is None:
+                    continue
+                if power >= cfg.leakage_min_power and power >= cfg.leakage_ratio * model_power:
+                    suspects.append((combo, power))
+
+        if not suspects:
+            return [
+                CheckResult(
+                    self.name,
+                    self.category,
+                    "OK",
+                    f"no combination of up to {max(cfg.combined_leakage_combo_sizes)} "
+                    f"feature(s) approaches the model's own predictive power "
+                    f"({model_power:.3f}) across {n_tested} combination(s) tested over "
+                    f"{len(candidates)} candidate column(s)",
+                    self.blocking,
+                    metadata={
+                        "model_power": round(model_power, 4),
+                        "threshold_ratio": cfg.leakage_ratio,
+                        "min_power": cfg.leakage_min_power,
+                        "n_candidates_scored": len(candidates),
+                        "n_combinations_tested": n_tested,
+                    },
+                )
+            ]
+
+        # Strongest finding first; once a column has been claimed by a
+        # reported combination, any other combination sharing that column is
+        # folded into it rather than reported again. A correlated cluster of
+        # features that all pair well with one driver is one finding, not
+        # one result per pair.
+        suspects.sort(key=lambda pair: -pair[1])
+        reported: list[tuple[tuple[str, ...], float]] = []
+        suppressed: dict[tuple[str, ...], list[tuple[tuple[str, ...], float]]] = {}
+        claimed_by: dict[str, tuple[str, ...]] = {}
+        for combo, power in suspects:
+            owner = next((claimed_by[c] for c in combo if c in claimed_by), None)
+            if owner is not None:
+                suppressed[owner].append((combo, power))
+                continue
+            reported.append((combo, power))
+            suppressed[combo] = []
+            for c in combo:
+                claimed_by[c] = combo
+
+        results = []
+        for combo, power in reported:
+            overlapping = sorted(suppressed[combo], key=lambda pair: -pair[1])
+            note = ""
+            if overlapping:
+                note = (
+                    f" — {len(overlapping)} other combination(s) sharing a column with "
+                    "this one also qualified and are folded into this finding rather "
+                    "than reported separately"
+                )
+            results.append(
+                CheckResult(
+                    self.name,
+                    self.category,
+                    "COMBINED_LEAKAGE_RISK",
+                    detail=(
+                        f"{' + '.join(combo)} together reach {power:.3f} of the target "
+                        f"out-of-fold ({power / model_power:.0%} of the whole model's "
+                        f"{model_power:.3f}), while no single one of them alone reaches "
+                        f"{cfg.leakage_min_power:.2f} — check whether they are different "
+                        "views of the same post-outcome fact (e.g. an actual value and "
+                        f"the plan or schedule it is compared against to define the "
+                        f"label){note}"
+                    ),
+                    blocking=self.blocking,
+                    metadata={
+                        "features": list(combo),
+                        "combo_power": round(power, 4),
+                        "model_power": round(model_power, 4),
+                        "power_ratio": round(power / model_power, 4),
+                        "individual_power": {
+                            c: (round(p, 4) if (p := individual_power[c]) is not None else None)
+                            for c in combo
+                        },
+                        "threshold_ratio": cfg.leakage_ratio,
+                        "min_power": cfg.leakage_min_power,
+                        "cv_folds": cfg.combined_leakage_cv_folds,
+                        "n_candidates_scored": len(candidates),
+                        "n_combinations_tested": n_tested,
+                        "suppressed_combinations": [
+                            {"features": list(c), "combo_power": round(p, 4)}
+                            for c, p in overlapping[:5]
+                        ],
+                        "n_suppressed": len(overlapping),
+                    },
+                )
+            )
+        return results
 
 
 class SplitOverlapCheck(BaseCheck):
@@ -708,6 +1071,7 @@ class FeatureDriftCheck(BaseCheck):
 
 
 __all__ = [
+    "CombinedFeatureLeakageCheck",
     "FeatureContractCheck",
     "FeatureDriftCheck",
     "LeakageCheck",

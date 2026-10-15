@@ -92,6 +92,10 @@ report = run_structured_gate(model, X_val, y_val, y_pred, protected_df=protected
 **Validation** (blocking — and reported first)
 - `LeakageCheck` — a feature whose solo predictive power rivals the whole
   model's, the signature of a leaked target
+- `CombinedFeatureLeakageCheck` — a *combination* of features that rivals the
+  whole model's power even though none of them does alone, scored
+  out-of-fold — e.g. an actual value and the plan/schedule it is compared
+  against to define the label
 - `SplitOverlapCheck` — rows the model has already seen, plus duplicates
   within the validation set
 - `ValidationStrategyCheck` — was the holdout separated in time, or at
@@ -834,7 +838,7 @@ shapes most of the conventions, and `CONTRIBUTING.md` explains them.
 
 ## Examples
 
-Nine runnable notebooks live in [`examples/`](examples/), committed with
+Ten runnable notebooks live in [`examples/`](examples/), committed with
 outputs so they read without being run:
 
 | Notebook | Covers |
@@ -848,5 +852,6 @@ outputs so they read without being run:
 | [07 insurance pricing](examples/07_insurance_pricing_end_to_end.ipynb) | exposure, A/E, the Gini, monotonicity and dislocation on one motor book |
 | [08 generative side-cars](examples/08_generative_side_car.ipynb) | prompt injection on both surfaces, and a canary leak caught |
 | [09 champion and challenger](examples/09_champion_challenger.ipynb) | replacing a scorecard: better overall, worse for one channel, and the loading traps |
+| [10 combined-feature leakage](examples/10_combined_feature_leakage.ipynb) | a leak split across two unremarkable-looking columns, and the check that catches it |
 
 See [`CHANGELOG.md`](https://github.com/vanjy-eng/model-gate/blob/main/CHANGELOG.md) for release history.

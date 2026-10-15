@@ -1,6 +1,6 @@
 # The checks
 
-Thirty-three built-in checks across six categories. Each declares a
+Thirty-four built-in checks across six categories. Each declares a
 **category**, whether it is **blocking**, and which **tasks** it supports.
 Sixteen also draw a chart — see [Plots](plots.md).
 
@@ -19,12 +19,13 @@ model had memorised.
 | Check | Needs | Flags |
 |---|---|---|
 | `target_leakage` | `y_true`, `y_pred` | `LEAKAGE_RISK` |
+| `combined_feature_leakage` | `y_true`, `y_pred` | `COMBINED_LEAKAGE_RISK` (non-blocking) |
 | `split_overlap` | `X_train` for the overlap half | `SPLIT_OVERLAP_RISK`, `DUPLICATE_ROWS_RISK` |
 | `validation_strategy` | `model_card` | `VALIDATION_STRATEGY_RISK` |
 | `feature_contract` | `X_train` or `expected_features` | `FEATURE_CONTRACT_RISK`, `FEATURE_ORDER_RISK` |
 | `feature_drift` | `X_train` | `DRIFT_RISK` (non-blocking) |
 
-All five work on a **core install**. A validation set that is secretly the
+All six work on a **core install**. A validation set that is secretly the
 training set is the last thing that should go unchecked because scikit-learn
 is missing.
 
@@ -47,6 +48,56 @@ feature scoring 0.54 reaches 98% of it and means nothing.
 Near-unique string columns are skipped rather than scored, since an
 identifier puts every row in its own group and drives the statistic to 1 by
 arithmetic.
+
+### `combined_feature_leakage`
+
+Does a small *combination* of columns do what the whole model does, even
+though none of them does alone? `target_leakage` asks the question for one
+column at a time, which misses a leak split across several
+individually-unremarkable columns.
+
+That gap is not hypothetical. A public supply-chain dataset's own
+late-delivery label is defined by comparing two of its own columns — a
+scheduled window against a realised one. Scored individually, each reaches
+power 0.40, half of `target_leakage`'s 0.80 floor. Their difference alone
+reaches 0.94, and a sign rule built from it scores 97.5% accuracy on the
+full dataset, because that comparison is how the label was derived. A model
+trained on both columns as features benchmarks 0.24 ROC AUC higher than the
+same model without one of them — arithmetic, not model skill. A runnable,
+synthetic-data reproduction lives in this repo at
+[`examples/10_combined_feature_leakage.ipynb`](https://github.com/vanjy-eng/model-gate/blob/main/examples/10_combined_feature_leakage.ipynb);
+for the full numbers against the real dataset and a live demo of the finding,
+see [chaqBD/bdp-gate-DataCo](https://github.com/chaqBD/bdp-gate-DataCo)
+(further reading — the dataset is CC BY 4.0, via
+[Mendeley Data](https://data.mendeley.com/datasets/8gx2fvg2k6)).
+
+For every candidate pair (and, if `combined_leakage_combo_sizes` is widened,
+triple) of numeric columns — datetime, unsigned-integer and boolean columns
+count too — a plain least-squares combination is fit and scored
+**out-of-fold** — on a fit that never saw the row it scores, so a flag
+reflects reusable signal rather than a fit's freedom to find *some* line
+through the data — on the same 0–1 power scale `target_leakage` uses. Fold
+assignment is derived from row content rather than position, so permuting
+the validation frame cannot change a verdict. Above `combined_leakage_max_rows`
+usable rows, the search itself (not the rest of the check) runs on a
+`stable_sample` subsample, which stays order-invariant for the same reason.
+
+A column `target_leakage` would already flag alone is dropped from the
+candidate pool by default (`combined_leakage_skip_covered_features`), so
+every finding here is something that check could not have told you. Past
+`combined_leakage_max_features` candidate columns, only the ones with the
+highest individual power are combined, the same trade-off
+`proxy_correlation`'s own comparison grid makes. A correlated cluster of
+features that all pair well with one driver is reported once — the
+strongest combination — with every other combination sharing a column
+folded into its `metadata` rather than reported again.
+
+**Non-blocking.** Two columns matching the model's power is the ordinary
+shape of a parsimonious, honest model, not only of a leak — a model with no
+leak at all, whose signal genuinely is two strong real features, reads
+identically to one here. The asymmetry that makes `target_leakage` safe to
+block on (one feature rivaling the model is rare) does not hold for pairs,
+so a finding here routes to a human instead, the way `feature_drift`'s does.
 
 ### `split_overlap`
 

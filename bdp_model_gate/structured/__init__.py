@@ -43,6 +43,7 @@ from .security import (
     ReportInjectionCheck,
 )
 from .validation_checks import (
+    CombinedFeatureLeakageCheck,
     FeatureContractCheck,
     FeatureDriftCheck,
     LeakageCheck,
@@ -68,6 +69,7 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         # other number in the report is unsound, which is a strictly prior
         # question to whether the model is any good.
         LeakageCheck(config.validation),
+        CombinedFeatureLeakageCheck(config.validation),
         SplitOverlapCheck(config.validation),
         ValidationStrategyCheck(config.validation, config.compliance),
         FeatureContractCheck(config.validation),
@@ -128,6 +130,7 @@ __all__ = [
     "DislocationCheck",
     "MonotonicityCheck",
     "RiskDiscriminationCheck",
+    "CombinedFeatureLeakageCheck",
     "FeatureContractCheck",
     "FeatureDriftCheck",
     "LeakageCheck",
