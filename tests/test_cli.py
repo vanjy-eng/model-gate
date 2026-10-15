@@ -200,6 +200,52 @@ def test_cli_json_config_overrides(cli_fixtures):
     assert exit_code == 1  # near-impossible score threshold should block
 
 
+def test_psi_fields_round_trip_through_json_and_yaml_config(cli_fixtures):
+    """`drift_statistic` and the three `psi_*` fields all arrive as plain
+    JSON/YAML scalars (a string, an int, two floats) — no tuple or other
+    type that needs special handling through `_apply_config_overrides`'s
+    plain `setattr`, but worth proving rather than assuming, since a type
+    mismatch here (e.g. `psi_bins: "10"` as a YAML string) would surface
+    only once FeatureDriftCheck actually ran."""
+    from bdp_model_gate.cli import _apply_config_overrides, _load_structured_config_file
+    from bdp_model_gate.config import GateConfig
+    from bdp_model_gate.structured.validation_checks import FeatureDriftCheck
+
+    overrides = {
+        "validation": {
+            "drift_statistic": "psi",
+            "psi_bins": 8,
+            "psi_moderate_threshold": 0.08,
+            "psi_significant_threshold": 0.20,
+        }
+    }
+    for suffix, dump in ((".json", json.dumps(overrides)), (".yaml", None)):
+        config_path = cli_fixtures["tmp_path"] / f"psi_config{suffix}"
+        if suffix == ".json":
+            config_path.write_text(dump)
+        else:
+            config_path.write_text(
+                "validation:\n"
+                "  drift_statistic: psi\n"
+                "  psi_bins: 8\n"
+                "  psi_moderate_threshold: 0.08\n"
+                "  psi_significant_threshold: 0.20\n"
+            )
+
+        gate_config = GateConfig()
+        loaded = _load_structured_config_file(str(config_path))
+        _apply_config_overrides(gate_config, loaded)
+
+        assert gate_config.validation.drift_statistic == "psi"
+        assert gate_config.validation.psi_bins == 8
+        assert gate_config.validation.psi_moderate_threshold == 0.08
+        assert gate_config.validation.psi_significant_threshold == 0.20
+
+        # And the resulting config actually constructs a working check,
+        # rather than merely holding attributes of the right value.
+        FeatureDriftCheck(gate_config.validation, gate_config.uncertainty)
+
+
 def test_cli_yaml_config_overrides(cli_fixtures):
     config_path = cli_fixtures["tmp_path"] / "config.yaml"
     config_path.write_text("performance:\n  metric: accuracy\n  min_score: 1.5\n")

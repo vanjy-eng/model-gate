@@ -191,6 +191,30 @@ class ValidationConfig:
     #: For a categorical feature: total variation distance between the two
     #: frequency tables, on 0–1.
     categorical_drift_threshold: float = 0.15
+    #: Which statistic `FeatureDriftCheck` measures drift with: the default
+    #: `"standardised_shift"` (standardised mean shift / total variation
+    #: distance, above), or `"psi"` for the Population Stability Index —
+    #: the measure credit-risk auditors recognise by name, and the one
+    #: convention supplies fixed bands for regardless of whether a feature
+    #: is numeric or categorical. An unrecognised value is rejected as soon
+    #: as the check is constructed rather than failing confusingly mid-run.
+    drift_statistic: str = "standardised_shift"
+    #: Quantile bins a numeric feature is cut into before computing PSI,
+    #: using edges taken from the *training* distribution so a live value
+    #: outside that range still falls in the nearest bin rather than being
+    #: dropped. Ignored for `"standardised_shift"` and for categorical
+    #: features, which use their existing category levels as the bins.
+    psi_bins: int = 10
+    #: PSI's conventional "worth a look" band. A feature sitting here is
+    #: reported alongside an otherwise-clean result rather than silently
+    #: absorbed into `OK` — catching drift here, before it becomes severe,
+    #: is the point of using PSI instead of waiting for `psi_significant_threshold`.
+    psi_moderate_threshold: float = 0.10
+    #: PSI's conventional "significant shift" band — crossing this is what
+    #: raises `DRIFT_RISK` under `drift_statistic="psi"`, the same role
+    #: `drift_threshold`/`categorical_drift_threshold` play for the default
+    #: statistic.
+    psi_significant_threshold: float = 0.25
     #: Values of `model_card["validation_strategy"]` that count as a holdout
     #: separated in *time* rather than at random.
     out_of_time_strategies: list[str] = field(

@@ -24,8 +24,12 @@ report = ModelGate(checks=default_structured_checks(config)).run(context)
 | `leakage_min_power` | `0.80` | ...and only if it clears this absolutely. Both must hold |
 | `max_split_overlap` | `0.01` | validation rows also present in `X_train` |
 | `max_duplicate_fraction` | `0.05` | exact duplicate rows *within* the validation set |
-| `drift_threshold` | `0.25` | standardised mean shift, numeric features |
-| `categorical_drift_threshold` | `0.15` | total variation distance, categorical features |
+| `drift_threshold` | `0.25` | standardised mean shift, numeric features — `drift_statistic="standardised_shift"` only |
+| `categorical_drift_threshold` | `0.15` | total variation distance, categorical features — `drift_statistic="standardised_shift"` only |
+| `drift_statistic` | `"standardised_shift"` | or `"psi"` — see below |
+| `psi_bins` | `10` | quantile bins a numeric feature is cut into before scoring PSI |
+| `psi_moderate_threshold` | `0.10` | PSI's "worth a look" band — named in the result, not flagged |
+| `psi_significant_threshold` | `0.25` | PSI's flagging threshold — raises `DRIFT_RISK` |
 | `out_of_time_strategies` | `out_of_time`, `temporal`, `forward_chaining`, `walk_forward` | values that count as separated in time |
 | `accepted_validation_strategies` | the four above plus `random_split`, `stratified_split`, `cross_validation`, `grouped_split` | anything else is flagged, not accepted |
 | `require_out_of_time_for_high_risk` | `True` | applies to `ComplianceConfig.high_risk_use_cases` |
@@ -40,6 +44,33 @@ leak.
 `max_split_overlap` is deliberately not zero. Identical feature vectors recur
 legitimately in data with few categorical levels, and the check says so when
 duplicates and overlap fire together.
+
+`drift_statistic="psi"` switches `feature_drift` to the Population Stability
+Index instead of standardised mean shift / total variation distance, scoring
+numeric and categorical features through the same bands —
+`psi_moderate_threshold` and `psi_significant_threshold` — rather than the
+separate numeric/categorical thresholds the default statistic needs. A
+typo'd `drift_statistic`, `psi_bins < 2`, or `psi_moderate_threshold` set
+above `psi_significant_threshold` is rejected with `GateConfigurationError`
+as soon as the check is built, not partway through a run:
+
+```python
+config.validation.drift_statistic = "psi"
+config.validation.psi_significant_threshold = 0.20  # tighter than the 0.25 convention
+```
+
+Binned PSI is biased upward at small samples, badly enough that two
+identical distributions can read `DRIFT_RISK` most of the time under a
+hundred rows per frame. `psi_bins` is the lever for it: a per-feature bias
+floor, `(psi_bins - 1) * (1/n_train + 1/n_live)`, has to sit below
+`psi_moderate_threshold` before a feature is scored at all — below it, the
+feature reports `NOT_APPLICABLE` rather than a point estimate the bias
+dominates. Lowering `psi_bins` (fewer, coarser bins) or raising
+`psi_moderate_threshold` both lower that floor; the other lever is more
+rows. Above the floor, the significant-threshold verdict is bootstrapped
+through the same `UncertaintyConfig` every interval-aware check already
+shares, so `uncertainty.bootstrap_samples`, `uncertainty.confidence_level`
+and `uncertainty.on_uncertain` all apply to it exactly as they do elsewhere.
 
 ```python
 config.validation.leakage_min_power = 0.90  # quieter on a strong model

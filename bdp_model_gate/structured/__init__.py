@@ -71,7 +71,7 @@ def default_structured_checks(config: GateConfig | None = None, include_plugins:
         SplitOverlapCheck(config.validation),
         ValidationStrategyCheck(config.validation, config.compliance),
         FeatureContractCheck(config.validation),
-        FeatureDriftCheck(config.validation),
+        FeatureDriftCheck(config.validation, config.uncertainty),
         # Then the comparison, when a champion is supplied: the first question
         # a reviewer of a replacement asks. NOT_APPLICABLE without one.
         *comparison_checks(
