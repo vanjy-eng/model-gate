@@ -226,6 +226,8 @@
     font-size: clamp(1.0625rem, 1.6vw, 1.1875rem);
     color: var(--ink-muted);
     max-width: var(--measure);
+    text-align: justify;
+    hyphens: auto;
   }
   .hero .lede strong { color: var(--ink); font-weight: 600; }
 
@@ -266,6 +268,7 @@
     color: var(--ink);
     overflow-x: auto;
     max-width: 100%;
+    white-space: nowrap; /* a command broken mid-word breaks the copy-paste too */
   }
   .install .prompt { color: var(--ink-faint); user-select: none; flex: none; }
 
